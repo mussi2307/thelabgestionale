@@ -34,6 +34,34 @@ che punta a `SCRIPT_URL` in cima a `index.html`.
 
 Dopo ogni modifica allo schema dei fogli va lanciato `setupSheets` dall'editor.
 
+## Test
+
+```
+npm test
+```
+
+Nessuna dipendenza da installare: usa `node:test`, incluso in Node. `package.json`
+esiste solo per dare un nome al comando.
+
+I test coprono la logica contabile delle provvigioni, che e' la parte dove un
+errore costerebbe caro e resterebbe invisibile a occhio. Due livelli:
+
+- **Funzioni pure** (`tests/provvigioni.test.js`, `tests/trattative.test.js`) —
+  `tests/extract.js` carica il blocco delimitato da `// <<<TESTABLE:PROVVIGIONI`
+  dentro `index.html` e lo esegue sotto Node. E' il modo per testare davvero
+  senza rompere il vincolo "un solo file, nessun build step". Le funzioni dentro
+  quel blocco non devono leggere `_s`, il DOM o altre globali: ricevono tutto per
+  parametro, ed e' proprio questo che le rende caricabili.
+- **Integrazione** (`tests/integrazione.test.js`) — valuta l'intero blocco
+  `<script>` principale in una sandbox con stub minimi di `document`/`window`,
+  poi inietta uno stato e chiama le **vere** `buildMovimenti()` e
+  `getRevenueAllocationsForProject()`. Verifica su 80 combinazioni di
+  acconto/saldo/corrisposto che la somma delle allocazioni di ogni movimento sia
+  esattamente pari al movimento e che nessuna quota vada sotto zero.
+
+Se aggiungi una funzione dentro il blocco testabile, aggiungila anche all'elenco
+`exported` in `tests/extract.js`, altrimenti i test non la vedono.
+
 ## Versionamento
 
 Le modifiche sono taggate inline nei commenti con la versione che le ha
