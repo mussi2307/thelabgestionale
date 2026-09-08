@@ -2137,7 +2137,10 @@ function buildPreventivoForm(p) {
   +fs('Dettagli Bundle',
     '<div class="field-grid"><div class="field"><label class="field-required">Nome bundle</label><input type="text" id="f-pvt-nome" value="'+escH(p.Nome_Bundle||'')+'" placeholder="es. Pacchetto Artista X"/></div>'
     +'<div class="field"><label>Tipo</label><select id="f-pvt-tipo"><option value="CUSTOM"'+((!p.Tipo_Bundle||p.Tipo_Bundle==='CUSTOM')?' selected':'')+'>Su misura</option><option value="LISTINO"'+(p.Tipo_Bundle==='LISTINO'?' selected':'')+'>Da listino</option></select></div></div>'
-    +'<div class="field-grid" style="margin-top:10px"><div class="field"><label>Data scadenza preventivo</label><input type="date" id="f-pvt-scad" value="'+escH(toInputDate(p.Data_Scadenza))+'" placeholder="'+today+'"/></div><div></div></div>')
+    +'<div class="field-grid" style="margin-top:10px"><div class="field"><label>Data scadenza preventivo</label><input type="date" id="f-pvt-scad" value="'+escH(toInputDate(p.Data_Scadenza))+'" placeholder="'+today+'"/></div>'
+    // [v8.4] Chi ha chiuso la trattativa. Vuoto = vendita diretta, nessuna provvigione.
+    +'<div class="field"><label>Venditore</label>'+buildVenditoreChips(p.ID_Venditore||'')
+    +'<input type="hidden" id="f-pvt-venditore" value="'+escAttr(p.ID_Venditore||'')+'"/></div></div>')
   +fs('Servizi inclusi',
     (!_s.listinoLoaded ? '<div id="listino-loading-placeholder" class="listino-loading">⏳ Caricamento servizi in corso…</div>' : '')
     +'<div id="prev-voci-list"></div>'
@@ -2316,6 +2319,29 @@ function renderPrevVociList() {
 }
 function updPrevVocePrezzo(i, val) { _prevVoci[i].prezzo = parseFloat(val) || 0; updPrevTotale(); }
 function selPrevOp(i, m, el) { _prevVoci[i].operatore = m; el.parentNode.querySelectorAll('.team-chip').forEach(function(c) { c.classList.remove('selected'); }); el.classList.add('selected'); }
+
+// [v8.4] Chip dei venditori attivi + chip "Vendita diretta" per azzerare.
+function buildVenditoreChips(sel) {
+  var attivi = venditoriAttivi();
+  if (!attivi.length) {
+    return '<div style="font-size:11px;color:var(--text3);padding:6px 0">Nessun venditore configurato. Aggiungine uno dal CRM → Trattative chiuse → Gestisci venditori.</div>';
+  }
+  return '<div class="team-select" id="pvt-vend-chips">'
+    + '<div class="team-chip'+(!sel?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevVenditore(\'\',this)">Vendita diretta</div>'
+    + attivi.map(function(c) {
+        return '<div class="team-chip'+(sel===c.ID_Collaboratore?' selected':'')+'" style="padding:3px 8px;font-size:11px" '
+          + 'onclick="selPrevVenditore(\''+escAttr(c.ID_Collaboratore)+'\',this)">'
+          + escH(c.Nome)+' <span style="opacity:.6">'+(parseFloat(c.Valore)||0)+'%</span></div>';
+      }).join('')
+    + '</div>';
+}
+
+function selPrevVenditore(id, el) {
+  setV('f-pvt-venditore', id);
+  var wrap = document.getElementById('pvt-vend-chips'); if (!wrap) return;
+  wrap.querySelectorAll('.team-chip').forEach(function(c) { c.classList.remove('selected'); });
+  el.classList.add('selected');
+}
 function updPrevTotale() {
   var tot = _prevVoci.reduce(function(s, vv) { return s + (vv.prezzo || 0); }, 0);
   var el = document.getElementById('prev-totale-val'); if (el) el.textContent = '€ ' + tot.toFixed(2);
@@ -2336,7 +2362,7 @@ function setPrevStato(el, stato) {
 function collectPreventivoForm() {
   var tot    = _prevVoci.reduce(function(s, vv) { return s + (parseFloat(vv.prezzo) || 0); }, 0);
   var lstTot = _prevVoci.reduce(function(s, vv) { return s + (parseFloat(vv.prezzoListino) || 0); }, 0);
-  return {ID_Cliente: _selClient ? _selClient.ID_Cliente : '', NomeCliente: _selClient ? _selClient.NomeCliente : '', Nome_Bundle: v('f-pvt-nome'), Tipo_Bundle: v('f-pvt-tipo'), Voci: _prevVoci, Prezzo_Totale: tot, Prezzo_Listino_Riferimento: lstTot, Stato: v('f-pvt-stato') || 'BOZZA', Motivo_Persa: v('f-pvt-motivo'), Data_Scadenza: v('f-pvt-scad'), Note_Interne: v('f-pvt-note-int'), Note_Cliente: v('f-pvt-note-cli')};
+  return {ID_Cliente: _selClient ? _selClient.ID_Cliente : '', NomeCliente: _selClient ? _selClient.NomeCliente : '', Nome_Bundle: v('f-pvt-nome'), Tipo_Bundle: v('f-pvt-tipo'), Voci: _prevVoci, Prezzo_Totale: tot, Prezzo_Listino_Riferimento: lstTot, ID_Venditore: v('f-pvt-venditore'), Stato: v('f-pvt-stato') || 'BOZZA', Motivo_Persa: v('f-pvt-motivo'), Data_Scadenza: v('f-pvt-scad'), Note_Interne: v('f-pvt-note-int'), Note_Cliente: v('f-pvt-note-cli')};
 }
 
 // [v8.3-15] Guardia client-side: intercetta il caso prima del round-trip.
