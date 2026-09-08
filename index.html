@@ -1416,6 +1416,21 @@ function nomeVenditore(id) {
   return c ? String(c.Nome || '') : '';
 }
 
+// [v8.4] Chiunque possa comparire in un'allocazione contabile: gli operatori
+// fissi piu' i venditori attivi. TEAM_MEMBERS da solo non basta piu' — un
+// venditore che non e' anche operatore riceverebbe la quota senza mai essere
+// disegnato in nessuna vista. Da usare ovunque si elenchino i BENEFICIARI dei
+// ricavi; NON per i selettori "chi esegue il servizio", dove il venditore non
+// c'entra e TEAM_MEMBERS resta corretto.
+function beneficiariRicavi() {
+  var out = TEAM_MEMBERS.slice();
+  venditoriAttivi().forEach(function(c) {
+    var n = String(c.Nome || '').trim();
+    if (n && out.indexOf(n) === -1) out.push(n);
+  });
+  return out;
+}
+
 // [v8.3-10] allineata a BACKEND_VERSION: prima era ferma a 7.1 contro un backend 8.0,
 // quindi il warning scattava a ogni login ed era diventato rumore. Ora torna a segnalare
 // davvero il caso "deployment Apps Script non ripubblicato".
@@ -3092,7 +3107,7 @@ function populateContabFilters() {
   });
   var memSel = document.getElementById('ent-filter-membro'); if (!memSel) return;
   memSel.innerHTML = '<option value="">Tutti i membri</option>';
-  TEAM_MEMBERS.forEach(function(m) { var o = document.createElement('option'); o.value = m; o.textContent = m; memSel.appendChild(o); });
+  beneficiariRicavi().forEach(function(m) { var o = document.createElement('option'); o.value = m; o.textContent = m; memSel.appendChild(o); });
 }
 
 function filterMovimenti() {
@@ -3162,14 +3177,9 @@ function renderTeamReport() {
   var meseKey = document.getElementById('team-filter-mese') ? document.getElementById('team-filter-mese').value : '';
   var cont = document.getElementById('team-report-cont'); if (!cont) return;
 
-  // [v8.4] Un venditore che non e' anche operatore non sta in TEAM_MEMBERS:
-  // riceverebbe l'allocazione ma non verrebbe disegnato. Primo passo verso la
-  // vista aggregata per beneficiario della proposta espansione §9.7.
-  var membri = TEAM_MEMBERS.slice();
-  venditoriAttivi().forEach(function(c) {
-    var n = String(c.Nome || '').trim();
-    if (n && membri.indexOf(n) === -1) membri.push(n);
-  });
+  // [v8.4] Operatori fissi piu' venditori attivi: vista aggregata per
+  // beneficiario, come da proposta espansione §9.7.
+  var membri = beneficiariRicavi();
   var byMembro = {}; var totStudio = 0;
   membri.forEach(function(m){ byMembro[m] = 0; });
 
@@ -3844,7 +3854,8 @@ function renderChartEntrate() {
 
 function renderChartTeam(meseKey, tecnicoFilter) {
   var dati = {};
-  TEAM_MEMBERS.forEach(function(m){ dati[m] = 0; });
+  var benef = beneficiariRicavi();
+  benef.forEach(function(m){ dati[m] = 0; });
 
   buildMovimenti().forEach(function(m) {
     var d = new Date(m.data);
@@ -3858,13 +3869,18 @@ function renderChartTeam(meseKey, tecnicoFilter) {
     });
   });
 
-  var labels = TEAM_MEMBERS;
-  var data = TEAM_MEMBERS.map(function(m){ return Math.round(dati[m] || 0); });
+  var labels = benef;
+  var data = benef.map(function(m){ return Math.round(dati[m] || 0); });
   if (_charts.team) { _charts.team.destroy(); }
   var ctx = document.getElementById('chart-team'); if (!ctx) return;
   _charts.team = new Chart(ctx, {
     type: 'bar',
-    data: { labels: labels, datasets: [{ label:'Revenue', data:data, backgroundColor:['rgba(91,156,246,.4)','rgba(155,127,232,.4)','rgba(62,184,154,.4)','rgba(224,123,58,.4)','rgba(200,169,110,.4)'], borderColor:['#5b9cf6','#9b7fe8','#3eb89a','#e07b3a','#C8A96E'], borderWidth:2, borderRadius:4 }] },
+    // [v8.4] La palette si cicla: i beneficiari non sono piu' 5 fissi, un
+    // venditore aggiunto dal pannello resterebbe altrimenti senza colore.
+    data: { labels: labels, datasets: [{ label:'Revenue', data:data,
+      backgroundColor: labels.map(function(_, i){ return ['rgba(91,156,246,.4)','rgba(155,127,232,.4)','rgba(62,184,154,.4)','rgba(224,123,58,.4)','rgba(200,169,110,.4)'][i % 5]; }),
+      borderColor: labels.map(function(_, i){ return ['#5b9cf6','#9b7fe8','#3eb89a','#e07b3a','#C8A96E'][i % 5]; }),
+      borderWidth:2, borderRadius:4 }] },
     options: { indexAxis:'y', responsive:true, plugins:{legend:{display:false}}, scales:{ x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#555',callback:function(v){return '€'+v;}}}, y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#aaa'}} } }
   });
 }
@@ -3939,7 +3955,7 @@ function populateDashMeseFilter() {
   var selT = document.getElementById('dash-tecnico-filter');
   if (selT) {
     selT.innerHTML = '<option value="">Tutti i tecnici</option>';
-    TEAM_MEMBERS.forEach(function(m) {
+    beneficiariRicavi().forEach(function(m) {
       var o = document.createElement('option'); o.value = m; o.textContent = m; selT.appendChild(o);
     });
   }

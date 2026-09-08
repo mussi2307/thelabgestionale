@@ -58,6 +58,7 @@ function loadApp() {
          + '__out.getRevenueAllocationsForProject=getRevenueAllocationsForProject;'
          + '__out.setState=function(s){_s=s;};'
          + '__out.TEAM_MEMBERS=TEAM_MEMBERS;'
+         + '__out.beneficiariRicavi=beneficiariRicavi;'
   );
   fn(sandbox.document, sandbox.window, sandbox.console, sandbox.fetch,
      sandbox.setTimeout, sandbox.clearTimeout, sandbox.setInterval,
@@ -258,4 +259,29 @@ test('nessun movimento porta mai una quota negativa, su una batteria di casi', f
     assert.strictEqual(Math.round(totAlloc * 100) / 100, a + s,
       'caso a=' + a + ' s=' + s + ' c=' + c + ': totale allocato != incassato');
   });
+});
+
+test('beneficiariRicavi include i venditori esterni a TEAM_MEMBERS', function() {
+  App.setState(statoBase([], [progettoBundle(100, 100)]));
+  var b = App.beneficiariRicavi();
+  App.TEAM_MEMBERS.forEach(function(m) {
+    assert.ok(b.indexOf(m) !== -1, 'manca l operatore fisso ' + m);
+  });
+  assert.ok(b.indexOf('Saso') !== -1, 'il venditore Saso deve comparire fra i beneficiari');
+});
+
+test('beneficiariRicavi non duplica chi e sia operatore sia venditore', function() {
+  var st = statoBase([], [progettoBundle(100, 100)]);
+  st.collaboratori = [{ ID_Collaboratore: 'k2', Nome: 'Mussi', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }];
+  App.setState(st);
+  var b = App.beneficiariRicavi();
+  var n = b.filter(function(x){ return x === 'Mussi'; }).length;
+  assert.strictEqual(n, 1, 'Mussi non deve comparire due volte');
+});
+
+test('beneficiariRicavi esclude i venditori con Data_Fine passata', function() {
+  var st = statoBase([], [progettoBundle(100, 100)]);
+  st.collaboratori = [{ ID_Collaboratore: 'k3', Nome: 'Uscito', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
+  App.setState(st);
+  assert.ok(App.beneficiariRicavi().indexOf('Uscito') === -1, 'un venditore chiuso non deve comparire nei selettori');
 });
