@@ -1098,6 +1098,8 @@ td.soon{color:var(--amber);}
 var _s = {
   user: null, clients: [], projects: [], preventivi: [],
   interazioni: {},   // [v8.3-24] cache per ID_Cliente: il log si carica lazy all'apertura del pannello
+  collaboratori: [], provvigioni: [],   // [v8.4] venditori e loro provvigioni
+  loadingProvvigioni: false,
   listino: { servizi: [], bundles: [] },
   listinoLoaded: false,
   loadingClients: false, loadingProjects: false, loadingBundle: false,
@@ -1194,6 +1196,8 @@ function handleCredentialResponse(r) {
   loadListino();
   loadObiettiviMensili();
   loadBackendInfo();
+  loadCollaboratori();
+  loadProvvigioni();
 }
 
 function parseJwt(t) {
@@ -1339,10 +1343,44 @@ function loadObiettiviMensili() {
 }
 
 
+// ── COLLABORATORI / PROVVIGIONI ──────────────────────────────
+// [v8.4] Su backend vecchio le due azioni non esistono: si degrada a lista
+// vuota invece di rompere il login, come gia' fa il fallback dello Stabile.
+function loadCollaboratori(cb) {
+  apiGet({action: 'getCollaboratori'})
+    .then(function(d) { _s.collaboratori = Array.isArray(d) ? d : []; if (cb) cb(); })
+    .catch(function() { _s.collaboratori = []; if (cb) cb(); });
+}
+
+function loadProvvigioni(cb) {
+  _s.loadingProvvigioni = true;
+  apiGet({action: 'getProvvigioni'})
+    .then(function(d) { _s.loadingProvvigioni = false; _s.provvigioni = Array.isArray(d) ? d : []; if (cb) cb(); })
+    .catch(function() { _s.loadingProvvigioni = false; _s.provvigioni = []; if (cb) cb(); });
+}
+
+// Venditori validi alla data odierna: alimentano i selettori.
+// Un venditore chiuso con Data_Fine sparisce dai menu ma resta nelle righe storiche.
+function venditoriAttivi() {
+  var oggi = new Date().toISOString().split('T')[0];
+  return (_s.collaboratori || []).filter(function(c) {
+    if (!c || c.Ruolo !== 'Venditore') return false;
+    var di = String(c.Data_Inizio || '2000-01-01').split('T')[0] || '2000-01-01';
+    var df = String(c.Data_Fine || '2099-12-31').split('T')[0] || '2099-12-31';
+    return di <= oggi && oggi <= df;
+  });
+}
+
+function nomeVenditore(id) {
+  if (!id) return '';
+  var c = (_s.collaboratori || []).find(function(x) { return x.ID_Collaboratore === id; });
+  return c ? String(c.Nome || '') : '';
+}
+
 // [v8.3-10] allineata a BACKEND_VERSION: prima era ferma a 7.1 contro un backend 8.0,
 // quindi il warning scattava a ogni login ed era diventato rumore. Ora torna a segnalare
 // davvero il caso "deployment Apps Script non ripubblicato".
-var REQUIRED_BACKEND_VERSION = "8.3";
+var REQUIRED_BACKEND_VERSION = "8.4";
 
 function loadBackendInfo() {
   apiGet({action: 'getBackendInfo'})
@@ -2617,9 +2655,24 @@ function getEffectiveProjectDate(p, tipo) {
   return '';
 }
 
-function getRevenueAllocationsForProject(p, incassato) {
+// [v8.4] quotaVenditore e' gia' stata ritagliata da buildMovimenti: qui viene
+// solo attribuita, e la logica storica a tre livelli lavora su cio' che resta.
+// I tecnici occasionali (proposta espansione §9.4) si innestano nello stesso
+// punto: un'altra deduzione prima di calcolare `netto`.
+function getRevenueAllocationsForProject(p, incassato, nomeVend, quotaVenditore) {
   var alloc = {};
   TEAM_MEMBERS.forEach(function(m){ alloc[m] = 0; });
+
+  var quotaV = parseFloat(quotaVenditore) || 0;
+  if (quotaV < 0) quotaV = 0;
+  var netto = (parseFloat(incassato) || 0) - quotaV;
+  if (netto < 0) { quotaV = parseFloat(incassato) || 0; netto = 0; }
+  if (quotaV > 0 && nomeVend) {
+    if (alloc[nomeVend] === undefined) alloc[nomeVend] = 0;
+    alloc[nomeVend] += quotaV;
+  }
+  incassato = netto;
+
   var voci = Array.isArray(p.Voci_Bundle) ? p.Voci_Bundle : [];
   var vociConOperatore = voci.filter(function(vv){
     return (parseFloat(vv.prezzo || vv.compenso || 0) || 0) > 0 && String(vv.operatore || '').trim();
@@ -2676,6 +2729,17 @@ function buildMovimenti() {
     var acc = parseFloat(p.Acconto) || 0;
     var sal = parseFloat(p.Saldo) || 0;
 
+    // [v8.4] La provvigione corrisposta si consuma in ordine cronologico,
+    // intaccando per prima l'acconto. Il residuo vive qui perche' la funzione
+    // di allocazione, da sola, non sa quale movimento sta trattando ne' quanto
+    // e' gia' stato consumato dal precedente.
+    var prov = trovaProvvigioneProgetto(p, _s.provvigioni);
+    var residuoProv = prov ? prov.residuo : 0;
+    var nomeVend = prov ? prov.nome : '';
+    var tagAcc = ritagliaProvvigione(acc, residuoProv);
+    residuoProv = tagAcc.residuoDopo;
+    var tagSal = ritagliaProvvigione(sal, residuoProv);
+
     if (acc > 0) {
       var dataAcc = getEffectiveProjectDate(p, 'ACCONTO');
       if (dataAcc) {
@@ -2686,7 +2750,7 @@ function buildMovimenti() {
           projectCode: p.ProjectCode,
           tipo: 'ACCONTO',
           importo: acc,
-          allocazioni: getRevenueAllocationsForProject(p, acc),
+          allocazioni: getRevenueAllocationsForProject(p, acc, nomeVend, tagAcc.quotaVenditore),
           prevCode: p.PreventivoCode_Origine || '',
           ID_Progetto: p.ID_Progetto
         });
@@ -2703,7 +2767,7 @@ function buildMovimenti() {
           projectCode: p.ProjectCode,
           tipo: 'SALDO',
           importo: sal,
-          allocazioni: getRevenueAllocationsForProject(p, sal),
+          allocazioni: getRevenueAllocationsForProject(p, sal, nomeVend, tagSal.quotaVenditore),
           prevCode: p.PreventivoCode_Origine || '',
           ID_Progetto: p.ID_Progetto
         });
@@ -2813,8 +2877,16 @@ function renderTeamReport() {
   var meseKey = document.getElementById('team-filter-mese') ? document.getElementById('team-filter-mese').value : '';
   var cont = document.getElementById('team-report-cont'); if (!cont) return;
 
+  // [v8.4] Un venditore che non e' anche operatore non sta in TEAM_MEMBERS:
+  // riceverebbe l'allocazione ma non verrebbe disegnato. Primo passo verso la
+  // vista aggregata per beneficiario della proposta espansione §9.7.
+  var membri = TEAM_MEMBERS.slice();
+  venditoriAttivi().forEach(function(c) {
+    var n = String(c.Nome || '').trim();
+    if (n && membri.indexOf(n) === -1) membri.push(n);
+  });
   var byMembro = {}; var totStudio = 0;
-  TEAM_MEMBERS.forEach(function(m){ byMembro[m] = 0; });
+  membri.forEach(function(m){ byMembro[m] = 0; });
 
   var movs = buildMovimenti();
   if (meseKey) {
@@ -2832,11 +2904,11 @@ function renderTeamReport() {
     });
   });
 
-  var maxVal = Math.max.apply(null, TEAM_MEMBERS.map(function(m){ return byMembro[m]||0; })) || 1;
+  var maxVal = Math.max.apply(null, membri.map(function(m){ return byMembro[m]||0; })) || 1;
   var obMussi = _s.obiettivi.mussi || 0;
 
   var html = '<div class="team-report-grid">';
-  TEAM_MEMBERS.forEach(function(m) {
+  membri.forEach(function(m) {
     var val = byMembro[m] || 0;
     var pct = Math.round((val / maxVal) * 100);
     var obHtml = '';
