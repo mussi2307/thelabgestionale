@@ -25,7 +25,7 @@ repo pubblico.
 **Frontend** — si modifica `index.html` e si fa push: l'hosting ridistribuisce
 da solo.
 
-**Backend** — il sorgente `.gs` **non sta in questo repo**: contiene l'ID del
+**Backend** — il sorgente `the-lab-backend-v8 (1).gs` **non sta in questo repo**: contiene l'ID del
 foglio Google, e un repo pubblico servito da Pages lo renderebbe scaricabile.
 Vive su disco e nell'editor Apps Script. Si modifica, si incolla nell'editor e
 si pubblica **come nuova versione dentro il deployment esistente**, mai come
