@@ -2462,6 +2462,55 @@ function getProjectAssignedMembers(p) {
     .filter(Boolean);
 }
 
+// ── PROVVIGIONI VENDITORI ────────────────────────────────────
+// [v8.4] Blocco di funzioni PURE: niente _s, niente DOM, niente globali.
+// tests/extract.js le carica fra questi marcatori e le esegue sotto Node.
+// Se aggiungi una funzione qui, aggiungila anche alla lista in extract.js.
+// <<<TESTABLE:PROVVIGIONI
+
+// Provvigione dovuta sull'intera trattativa: percentuale (0-100) applicata al
+// lordo del servizio. Numero fisso, noto dalla chiusura, base del rosso in lista.
+function provvigioneDovuta(importoTrattativa, percentuale) {
+  var imp = parseFloat(importoTrattativa) || 0;
+  var pct = parseFloat(percentuale) || 0;
+  if (imp <= 0 || pct <= 0) return 0;
+  return Math.round(imp * pct) / 100;
+}
+
+// Ritaglia da un movimento (acconto o saldo) la quota spettante al venditore,
+// consumando il corrisposto in ordine cronologico: prima l'acconto, poi il saldo.
+// Non produce mai numeri negativi: e' il vincolo che tiene fuori le quote negative
+// dal Rendiconto Team.
+function ritagliaProvvigione(importoMovimento, residuoDaAllocare) {
+  var imp = parseFloat(importoMovimento) || 0;
+  var res = parseFloat(residuoDaAllocare) || 0;
+  if (imp < 0) imp = 0;
+  if (res < 0) res = 0;
+  if (imp === 0 || res === 0) return { quotaVenditore: 0, restante: imp, residuoDopo: res };
+  var quota = Math.min(res, imp);
+  return { quotaVenditore: quota, restante: imp - quota, residuoDopo: res - quota };
+}
+
+// Aggancia un progetto alla sua riga di provvigione passando dal preventivo
+// d'origine. Ritorna null quando non c'e' niente da allocare: nessun preventivo
+// d'origine, nessuna riga, corrisposto a zero o venditore senza nome.
+function trovaProvvigioneProgetto(progetto, provvigioni) {
+  var idPrev = progetto && progetto.ID_Preventivo_Origine;
+  if (!idPrev) return null;
+  if (!provvigioni || !provvigioni.length) return null;
+  for (var i = 0; i < provvigioni.length; i++) {
+    var r = provvigioni[i];
+    if (!r || r.ID_Preventivo !== idPrev) continue;
+    var corr = parseFloat(r.Importo_Corrisposto) || 0;
+    var nome = String(r.Nome_Venditore || '').trim();
+    if (corr > 0 && nome) return { nome: nome, residuo: corr };
+    return null;
+  }
+  return null;
+}
+
+// TESTABLE:PROVVIGIONI>>>
+
 function getEffectiveProjectDate(p, tipo) {
   if (!p) return '';
   var direct = tipo === 'ACCONTO' ? (p.Data_Acconto_Effettiva || p.Data_Acconto) : (p.Data_Saldo_Effettiva || p.Data_Saldo);
