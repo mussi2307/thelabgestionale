@@ -2509,6 +2509,102 @@ function trovaProvvigioneProgetto(progetto, provvigioni) {
   return null;
 }
 
+// Normalizza il booleano letto da Sheets: la cella puo' contenere true, 1,
+// "SI", "TRUE", "vero" o vuoto. Stesso spirito di _haChiavi() nel backend.
+function _flagVero(v) {
+  if (v === true) return true;
+  if (v === false || v === undefined || v === null) return false;
+  var s = String(v).trim().toUpperCase();
+  return s === 'SI' || s === 'SÌ' || s === 'TRUE' || s === '1' || s === 'VERO' || s === 'YES';
+}
+
+// Costruisce le righe della tab "Trattative chiuse": un preventivo ACCETTATO
+// appartenente a un cliente in CLOSED_WON produce una riga. Un cliente che
+// ricompra ha due preventivi accettati e quindi due provvigioni distinte.
+function buildTrattativeChiuse(clients, preventivi, provvigioni, collaboratori, progetti) {
+  var out = [];
+  if (!preventivi || !preventivi.length) return out;
+
+  var cliChiusi = {};
+  (clients || []).forEach(function(c) {
+    if (c && c.ID_Cliente && c.StatoPipeline === 'CLOSED_WON') cliChiusi[c.ID_Cliente] = c;
+  });
+
+  var provByPrev = {};
+  (provvigioni || []).forEach(function(r) {
+    if (r && r.ID_Preventivo) provByPrev[r.ID_Preventivo] = r;
+  });
+
+  var collById = {};
+  (collaboratori || []).forEach(function(k) {
+    if (k && k.ID_Collaboratore) collById[k.ID_Collaboratore] = k;
+  });
+
+  var prjByPrev = {};
+  (progetti || []).forEach(function(p) {
+    if (p && p.ID_Preventivo_Origine) prjByPrev[p.ID_Preventivo_Origine] = p;
+  });
+
+  preventivi.forEach(function(pv) {
+    if (!pv || pv.Stato !== 'ACCETTATO') return;
+    var cli = cliChiusi[pv.ID_Cliente];
+    if (!cli) return;
+
+    var riga = provByPrev[pv.ID_Preventivo] || null;
+    var idVend = (riga && riga.ID_Venditore) || pv.ID_Venditore || '';
+    var coll = idVend ? collById[idVend] : null;
+
+    // La percentuale congelata nella riga vince sempre su quella corrente del
+    // registro: le provvigioni gia' aperte non si muovono se cambi il listino.
+    var pct = 0;
+    if (riga && riga.Percentuale !== undefined && riga.Percentuale !== '') pct = parseFloat(riga.Percentuale) || 0;
+    else if (coll) pct = parseFloat(coll.Valore) || 0;
+
+    var nome = '';
+    if (riga && String(riga.Nome_Venditore || '').trim()) nome = String(riga.Nome_Venditore).trim();
+    else if (coll) nome = String(coll.Nome || '').trim();
+
+    var importo = parseFloat(pv.Prezzo_Totale) || 0;
+    var dovuto = nome ? provvigioneDovuta(importo, pct) : 0;
+    var corrisposto = riga ? (parseFloat(riga.Importo_Corrisposto) || 0) : 0;
+    var chiusa = riga ? _flagVero(riga.Chiusa) : false;
+
+    var prj = prjByPrev[pv.ID_Preventivo] || null;
+    var incassato = prj ? ((parseFloat(prj.Acconto) || 0) + (parseFloat(prj.Saldo) || 0)) : 0;
+
+    var cliNome = String(pv.NomeCliente || '').trim();
+    if (!cliNome) cliNome = String((cli.Nome || '') + ' ' + (cli.Cognome || '')).trim();
+
+    var data = String(pv.UpdatedAt || pv.CreatedAt || '').split('T')[0];
+
+    out.push({
+      ID_Preventivo: pv.ID_Preventivo,
+      ID_Cliente: pv.ID_Cliente,
+      ID_Venditore: idVend,
+      data: data,
+      cliente: cliNome,
+      servizio: String(pv.Nome_Bundle || ''),
+      importoTrattativa: importo,
+      venditore: nome,
+      percentuale: pct,
+      dovuto: dovuto,
+      corrisposto: corrisposto,
+      residuo: Math.max(0, Math.round((dovuto - corrisposto) * 100) / 100),
+      // Corrisposto che gli incassi non coprono ancora: si allochera' da se'
+      // quando arrivera' il saldo. Va mostrato o in Rendiconto Team comparirebbe
+      // meno di quanto hai pagato, senza spiegazione visibile.
+      inSospeso: Math.max(0, Math.round((corrisposto - incassato) * 100) / 100),
+      chiusa: chiusa,
+      dataPagamento: riga ? String(riga.Data_Pagamento || '') : '',
+      rosso: !chiusa && dovuto > 0 && corrisposto < dovuto,
+      senzaProgetto: !prj
+    });
+  });
+
+  out.sort(function(a, b) { return String(b.data).localeCompare(String(a.data)); });
+  return out;
+}
+
 // TESTABLE:PROVVIGIONI>>>
 
 function getEffectiveProjectDate(p, tipo) {
