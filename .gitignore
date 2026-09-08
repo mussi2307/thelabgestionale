@@ -1,0 +1,21 @@
+# Backup locali pre-migrazione: storia gia' coperta da git
+*.bak-pre-*
+*.bak
+
+# Configurazione locale dell'assistente
+.claude/
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Backend Apps Script: tenuto fuori dal repo pubblico.
+# Contiene SPREADSHEET_ID, che il frontend non espone mai — e il sito
+# servito da Pages renderebbe il file scaricabile in chiaro.
+# Per versionarlo servirebbe un repo privato a parte.
+backend/
+
+# Documentazione tecnica: fuori dal repo pubblico su richiesta.
+# Descrive nel dettaglio l'architettura di sicurezza, whitelist compresa.
+docs/
