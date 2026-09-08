@@ -19,3 +19,8 @@ desktop.ini
 # Documentazione tecnica: fuori dal repo pubblico su richiesta.
 # Descrive nel dettaglio l'architettura di sicurezza, whitelist compresa.
 docs/
+
+# Backup di dati reali: nomi clienti e stati commerciali.
+# Il repo e' pubblico — questa roba non ci va, mai.
+backup-*.csv
+*.csv
