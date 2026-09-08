@@ -648,6 +648,14 @@ td.soon{color:var(--amber);}
   .stab-annual-row{grid-template-columns:28px 1fr 56px 56px 60px;font-size:11px;}
 }
 
+/* [v8.4] Provvigioni: il rosso segnala che il venditore non e' stato saldato. */
+.provv-scoperta{background:rgba(239,68,68,.10);}
+.provv-scoperta td{border-top-color:rgba(239,68,68,.25);}
+.provv-input{width:88px;padding:5px 7px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;}
+.provv-input:focus{outline:none;border-color:var(--gold);}
+.provv-input:disabled{opacity:.4;cursor:not-allowed;}
+.provv-residuo{display:block;font-size:10px;color:var(--red);margin-top:3px;}
+.provv-sospeso{display:block;font-size:10px;color:var(--text3);margin-top:3px;}
 </style>
 </head>
 <body>
@@ -732,6 +740,11 @@ td.soon{color:var(--amber);}
         </button>
       </div>
       <div class="page-content">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchCrmTab('clienti',this)">Clienti</button>
+          <button class="tab-btn" onclick="switchCrmTab('trattative',this)">Trattative chiuse</button>
+        </div>
+        <div id="crm-tab-clienti" class="tab-pane active">
         <div class="toolbar">
           <div class="search-wrap">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
@@ -765,6 +778,32 @@ td.soon{color:var(--amber);}
         <div id="clients-empty-state" class="empty-state" style="display:none">
           <p>Nessun cliente trovato</p>
           <button class="btn btn-primary btn-sm" onclick="openNewClientPanel()">+ Aggiungi il primo cliente</button>
+        </div>
+        </div>
+
+        <div id="crm-tab-trattative" class="tab-pane">
+          <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
+            <select class="filter-select" id="trt-filter-vend" onchange="renderTrattativeChiuse()">
+              <option value="">Tutti i venditori</option>
+            </select>
+            <select class="filter-select" id="trt-filter-stato" onchange="renderTrattativeChiuse()">
+              <option value="">Tutte</option>
+              <option value="APERTE">Solo da saldare</option>
+              <option value="CHIUSE">Solo chiuse</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" onclick="openCollaboratoriPanel()">Gestisci venditori</button>
+          </div>
+          <div id="trt-kpi-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Cliente</th><th>Servizio</th><th>Importo</th><th>Venditore</th><th>%</th><th>Dovuto</th><th>Corrisposto</th><th>Data pag.</th><th>Chiusa</th></tr></thead>
+              <tbody id="trt-table-body"></tbody>
+            </table>
+          </div>
+          <div id="trt-empty" class="empty-state" style="display:none">
+            <p>Nessuna trattativa chiusa</p>
+            <div style="font-size:12px;color:var(--text3);margin-top:6px">Una trattativa compare qui quando il cliente e' in pipeline "Chiuso ✓" e ha un preventivo accettato.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1492,6 +1531,133 @@ function renderClientsTable() {
       +'<td class="'+dcc+'">'+(c.ProssimaAzione?'<span style="font-size:11px;opacity:.7">'+escH(c.ProssimaAzione.substring(0,25))+'</span><br>':'')+dc+'</td>'
       +'<td><div class="td-actions"><button class="icon-btn" onclick="event.stopPropagation();openEditClientPanel(\''+id+'\')" title="Modifica"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3L11 2z"/></svg></button>'+del+'</div></td></tr>';
   }).join('');
+}
+
+// ── TRATTATIVE CHIUSE / PROVVIGIONI ──────────────────────────
+// [v8.4] La lista si calcola in memoria: una riga per preventivo ACCETTATO di
+// un cliente in CLOSED_WON. La riga sul foglio Provvigioni nasce solo alla
+// prima scrittura (materializzazione pigra).
+
+function switchCrmTab(tab, el) {
+  document.querySelectorAll('#page-crm .tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('#page-crm .tab-pane').forEach(function(p) { p.classList.remove('active'); });
+  el.classList.add('active');
+  var pane = document.getElementById('crm-tab-' + tab);
+  if (pane) pane.classList.add('active');
+  if (tab === 'trattative') {
+    ensureProjectsLoaded(function() {
+      ensurePreventivi(function() {
+        loadProvvigioni(function() { renderTrattativeChiuse(); });
+      });
+    });
+  }
+}
+
+function _righeTrattative() {
+  return buildTrattativeChiuse(_s.clients, _s.preventivi, _s.provvigioni, _s.collaboratori, _s.projects);
+}
+
+function renderTrattativeChiuse() {
+  var tb = document.getElementById('trt-table-body');
+  var em = document.getElementById('trt-empty');
+  if (!tb) return;
+
+  var rows = _righeTrattative();
+
+  // Popola il filtro venditori dai nomi realmente presenti in lista
+  var selV = document.getElementById('trt-filter-vend');
+  if (selV) {
+    var cur = selV.value;
+    var nomi = [];
+    rows.forEach(function(r) { if (r.venditore && nomi.indexOf(r.venditore) === -1) nomi.push(r.venditore); });
+    nomi.sort();
+    selV.innerHTML = '<option value="">Tutti i venditori</option>'
+      + nomi.map(function(n) { return '<option value="'+escAttr(n)+'">'+escH(n)+'</option>'; }).join('');
+    if (cur && nomi.indexOf(cur) !== -1) selV.value = cur;
+  }
+
+  var fv = selV ? selV.value : '';
+  var fsSel = document.getElementById('trt-filter-stato');
+  var fstato = fsSel ? fsSel.value : '';
+  var vis = rows.filter(function(r) {
+    if (fv && r.venditore !== fv) return false;
+    if (fstato === 'APERTE' && !r.rosso) return false;
+    if (fstato === 'CHIUSE' && r.rosso) return false;
+    return true;
+  });
+
+  var totDovuto = 0, totCorr = 0, nScoperte = 0;
+  vis.forEach(function(r) { totDovuto += r.dovuto; totCorr += r.corrisposto; if (r.rosso) nScoperte++; });
+  var kpi = document.getElementById('trt-kpi-row');
+  if (kpi) kpi.innerHTML =
+    kpiCard('Provvigioni dovute','€'+totDovuto.toFixed(2),'','kpi-gold')
+    + kpiCard('Gia corrisposte','€'+totCorr.toFixed(2),'','')
+    + kpiCard('Da saldare','€'+Math.max(0,totDovuto-totCorr).toFixed(2), nScoperte+' trattative scoperte','kpi-red');
+
+  if (!vis.length) { tb.innerHTML = ''; if (em) em.style.display = 'block'; return; }
+  if (em) em.style.display = 'none';
+
+  tb.innerHTML = vis.map(function(r) {
+    var idAttr = escAttr(r.ID_Preventivo);
+    var vendCell = r.venditore
+      ? '<span class="badge badge-purple" style="font-size:10px">'+escH(r.venditore)+'</span>'
+      : '<span class="badge badge-gray" style="font-size:10px">Vendita diretta</span>';
+    var servExtra = r.senzaProgetto
+      ? '<span class="provv-sospeso">Nessun progetto collegato: la provvigione non e ancora allocabile</span>' : '';
+    var residuoHtml = r.rosso ? '<span class="provv-residuo">Scoperto € '+r.residuo.toFixed(2)+'</span>' : '';
+    var sospesoHtml = r.inSospeso > 0
+      ? '<span class="provv-sospeso">€ '+r.inSospeso.toFixed(2)+' pagati ma non ancora coperti dagli incassi</span>' : '';
+    var disabled = r.venditore ? '' : ' disabled';
+    return '<tr class="'+(r.rosso ? 'provv-scoperta' : '')+'">'
+      + '<td>'+fmtDate(r.data)+'</td>'
+      + '<td class="bold">'+escH(r.cliente)+'</td>'
+      + '<td>'+escH(r.servizio)+servExtra+'</td>'
+      + '<td>€ '+r.importoTrattativa.toFixed(2)+'</td>'
+      + '<td>'+vendCell+'</td>'
+      + '<td>'+(r.percentuale ? r.percentuale+'%' : '—')+'</td>'
+      + '<td style="color:var(--gold);font-weight:600">€ '+r.dovuto.toFixed(2)+'</td>'
+      + '<td><input class="provv-input" type="number" min="0" step="0.01" id="provv-imp-'+idAttr+'" value="'+r.corrisposto+'"'+disabled
+      +   ' onchange="saveProvvRiga(\''+idAttr+'\')"/>'+residuoHtml+sospesoHtml+'</td>'
+      + '<td><input class="provv-input" type="date" id="provv-dat-'+idAttr+'" value="'+escAttr(r.dataPagamento)+'"'+disabled
+      +   ' onchange="saveProvvRiga(\''+idAttr+'\')"/></td>'
+      + '<td style="text-align:center"><input type="checkbox" id="provv-chk-'+idAttr+'"'+(r.chiusa?' checked':'')+disabled
+      +   ' onchange="saveProvvRiga(\''+idAttr+'\')" style="width:16px;height:16px;cursor:pointer"/></td>'
+      + '</tr>';
+  }).join('');
+}
+
+// Un solo salvataggio per tutti e tre i controlli della riga: importo, data e
+// spunta viaggiano insieme, cosi' un cambio non sovrascrive gli altri due.
+function saveProvvRiga(idPrev) {
+  var imp = document.getElementById('provv-imp-' + idPrev);
+  var dat = document.getElementById('provv-dat-' + idPrev);
+  var chk = document.getElementById('provv-chk-' + idPrev);
+  if (!imp) return;
+  var val = parseFloat(imp.value);
+  if (isNaN(val) || val < 0) { val = 0; imp.value = 0; }
+  // Se scrivi una cifra senza data, la data la mette il sistema: e' un
+  // promemoria di quando hai pagato, non un dato contabile.
+  if (dat && !dat.value && val > 0) dat.value = new Date().toISOString().split('T')[0];
+
+  apiPost({
+    action: 'saveProvvigione',
+    ID_Preventivo: idPrev,
+    Importo_Corrisposto: val,
+    Data_Pagamento: dat ? dat.value : '',
+    Chiusa: chk ? chk.checked : false
+  }).then(function(r) {
+    var i = -1;
+    for (var k = 0; k < _s.provvigioni.length; k++) {
+      if (_s.provvigioni[k].ID_Preventivo === idPrev) { i = k; break; }
+    }
+    if (i === -1) _s.provvigioni.push(r); else _s.provvigioni[i] = r;
+    renderTrattativeChiuse();
+    refreshAnalyticsViews();
+    showToast('Provvigione aggiornata', 'success');
+  }).catch(function(e) {
+    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+    renderTrattativeChiuse();
+  });
 }
 
 function buildClientForm(c) {
