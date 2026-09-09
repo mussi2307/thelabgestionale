@@ -1144,7 +1144,8 @@ td.soon{color:var(--amber);}
 var _s = {
   user: null, clients: [], projects: [], preventivi: [],
   interazioni: {},   // [v8.3-24] cache per ID_Cliente: il log si carica lazy all'apertura del pannello
-  collaboratori: [], provvigioni: [],   // [v8.4] venditori e loro provvigioni
+  provvigioni: [],   // [v8.4] provvigioni venditori
+  persone: [], ruoli: [],   // [v8.5] registro unico delle persone
   loadingProvvigioni: false,
   listino: { servizi: [], bundles: [] },
   listinoLoaded: false,
@@ -1189,7 +1190,6 @@ var PREV_STATO = {
   ACCETTATO:{label:"Accettato",cls:"badge-green2"},PERSO:{label:"Perso",cls:"badge-red"}
 };
 // [v4-01] TheLab aggiunto come operatore
-var TEAM_MEMBERS = ["Mussi","Cream","Pana","Saso","TheLab"];
 var FONTE_OPTIONS = ["Instagram","TikTok","YouTube","Passaparola","Sito web","Google Maps","Facebook","Altro"];
 var MESI_LABELS = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
 
@@ -1242,8 +1242,8 @@ function handleCredentialResponse(r) {
   loadListino();
   loadObiettiviMensili();
   loadBackendInfo();
-  loadCollaboratori();
   loadProvvigioni();
+  loadPersone();
 }
 
 function parseJwt(t) {
@@ -1389,13 +1389,23 @@ function loadObiettiviMensili() {
 }
 
 
-// ── COLLABORATORI / PROVVIGIONI ──────────────────────────────
-// [v8.4] Su backend vecchio le due azioni non esistono: si degrada a lista
-// vuota invece di rompere il login, come gia' fa il fallback dello Stabile.
-function loadCollaboratori(cb) {
-  apiGet({action: 'getCollaboratori'})
-    .then(function(d) { _s.collaboratori = Array.isArray(d) ? d : []; if (cb) cb(); })
-    .catch(function() { _s.collaboratori = []; if (cb) cb(); });
+// ── REGISTRO PERSONE ─────────────────────────────────────────
+// [v8.5] Sei funzioni quasi identiche sono diventate quattro chiamate a
+// nomiConRuolo(). Il filtro di validita' vive in un posto solo (attivoIl).
+
+// TheLab non e' una persona: e' l'entita' residuale dell'allocazione, non sta
+// nel registro e non e' assegnabile a compenso. Va aggiunto a mano in coda.
+var TEAM_FALLBACK = ["Mussi","Cream","Pana","Saso"];
+var STUDIO_NAME = "TheLab";
+
+function loadPersone(cb) {
+  apiGet({action: 'getPersone'})
+    .then(function(d) {
+      _s.persone = (d && Array.isArray(d.persone)) ? d.persone : [];
+      _s.ruoli   = (d && Array.isArray(d.ruoli))   ? d.ruoli   : [];
+      if (cb) cb();
+    })
+    .catch(function() { _s.persone = []; _s.ruoli = []; if (cb) cb(); });
 }
 
 function loadProvvigioni(cb) {
@@ -1405,67 +1415,46 @@ function loadProvvigioni(cb) {
     .catch(function() { _s.loadingProvvigioni = false; _s.provvigioni = []; if (cb) cb(); });
 }
 
-// Venditori validi alla data odierna: alimentano i selettori.
-// Un venditore chiuso con Data_Fine sparisce dai menu ma resta nelle righe storiche.
-function venditoriAttivi() {
-  var oggi = new Date().toISOString().split('T')[0];
-  return (_s.collaboratori || []).filter(function(c) {
-    if (!c || c.Ruolo !== 'Venditore') return false;
-    var di = String(c.Data_Inizio || '2000-01-01').split('T')[0] || '2000-01-01';
-    var df = String(c.Data_Fine || '2099-12-31').split('T')[0] || '2099-12-31';
-    return di <= oggi && oggi <= df;
-  });
+// Fallback obbligatorio: contro un backend non ancora ripubblicato il registro
+// e' vuoto, e senza questo ramo chip, filtri e Rendiconto Team si svuotano.
+function teamMembers() {
+  // Il fallback scatta solo se il REGISTRO e' assente, non se il filtro e'
+  // vuoto: "backend non ripubblicato" e "registro c'e' ma sono tutti chiusi"
+  // sono due situazioni diverse, e nella seconda va rispettato il registro.
+  var registroVuoto = !(_s.ruoli && _s.ruoli.length);
+  var n = registroVuoto ? TEAM_FALLBACK.slice() : nomiConRuolo(_s.ruoli, 'Team');
+  if (n.indexOf(STUDIO_NAME) === -1) n.push(STUDIO_NAME);
+  return n;
 }
 
-function nomeVenditore(id) {
-  if (!id) return '';
-  var c = (_s.collaboratori || []).find(function(x) { return x.ID_Collaboratore === id; });
-  return c ? String(c.Nome || '') : '';
+function fonici()     { return nomiConRuolo(_s.ruoli, 'Fonico'); }
+function venditori()  { return nomiConRuolo(_s.ruoli, 'Venditore'); }
+function affittuari() { return nomiConRuolo(_s.ruoli, 'Affittuario'); }
+
+// Valore economico del ruolo: percentuale per un venditore, euro per un fonico.
+function valoreRuolo(nome, ruolo) {
+  var r = personeConRuolo(_s.ruoli, ruolo).filter(function(x) {
+    return String(x.Nome || '').trim() === nome;
+  })[0];
+  return r ? (parseFloat(r.Valore) || 0) : 0;
 }
 
-// [v8.4] Chiunque possa comparire in un'allocazione contabile: gli operatori
-// fissi piu' i venditori attivi. TEAM_MEMBERS da solo non basta piu' — un
-// venditore che non e' anche operatore riceverebbe la quota senza mai essere
-// disegnato in nessuna vista. Da usare ovunque si elenchino i BENEFICIARI dei
-// ricavi; NON per i selettori "chi esegue il servizio", dove il venditore non
-// c'entra e TEAM_MEMBERS resta corretto.
-// [v8.4] Chi puo' ricevere un compenso esplicito su una voce: gli operatori
-// fissi piu' i tecnici occasionali attivi. I venditori restano fuori — sono
-// pagati a provvigione, non a compenso per servizio.
-function tecniciOccasionaliAttivi() {
-  var oggi = new Date().toISOString().split('T')[0];
-  return (_s.collaboratori || []).filter(function(c) {
-    if (!c || c.Ruolo !== 'Tecnico_Occasionale') return false;
-    var di = String(c.Data_Inizio || '2000-01-01').split('T')[0] || '2000-01-01';
-    var df = String(c.Data_Fine || '2099-12-31').split('T')[0] || '2099-12-31';
-    return di <= oggi && oggi <= df;
-  });
-}
-
+// Chi puo' ricevere un compenso esplicito su una voce: chi esegue il lavoro.
+// I venditori puri restano fuori — sono pagati a provvigione.
 function assegnabiliCompenso() {
-  var out = TEAM_MEMBERS.filter(function(m){ return m !== 'TheLab'; });
-  tecniciOccasionaliAttivi().forEach(function(c) {
-    var n = String(c.Nome || '').trim();
-    if (n && out.indexOf(n) === -1) out.push(n);
-  });
+  var out = teamMembers().filter(function(m){ return m !== STUDIO_NAME; });
+  fonici().forEach(function(n){ if (out.indexOf(n) === -1) out.push(n); });
   return out;
 }
 
-// Cifra precompilata quando scegli la chip: il Valore del registro se e' un
-// tecnico occasionale che ne ha uno, altrimenti si parte da vuoto.
-function compensoDefault(nome) {
-  var c = tecniciOccasionaliAttivi().find(function(x) { return String(x.Nome || '').trim() === nome; });
-  var v = c ? (parseFloat(c.Valore) || 0) : 0;
-  return v > 0 ? v : '';
-}
+function compensoDefault(nome) { return valoreRuolo(nome, 'Fonico') || ''; }
 
+// Chiunque possa comparire in un'allocazione contabile. Chi ha un ruolo chiuso
+// non e' qui, ma le sue quote storiche restano: le viste ciclano sull'unione
+// fra questa lista e le chiavi effettivamente presenti nei movimenti.
 function beneficiariRicavi() {
-  var out = TEAM_MEMBERS.slice();
-  // [v8.4] Venditori E tecnici occasionali: entrambi possono ricevere una
-  // quota, quindi entrambi devono comparire nelle viste, o l'allocazione
-  // finirebbe a qualcuno che nessuna schermata disegna.
-  venditoriAttivi().concat(tecniciOccasionaliAttivi()).forEach(function(c) {
-    var n = String(c.Nome || '').trim();
+  var out = teamMembers();
+  fonici().concat(venditori()).forEach(function(n) {
     if (n && out.indexOf(n) === -1) out.push(n);
   });
   return out;
@@ -1474,7 +1463,7 @@ function beneficiariRicavi() {
 // [v8.3-10] allineata a BACKEND_VERSION: prima era ferma a 7.1 contro un backend 8.0,
 // quindi il warning scattava a ogni login ed era diventato rumore. Ora torna a segnalare
 // davvero il caso "deployment Apps Script non ripubblicato".
-var REQUIRED_BACKEND_VERSION = "8.4";
+var REQUIRED_BACKEND_VERSION = "8.5";
 
 function loadBackendInfo() {
   apiGet({action: 'getBackendInfo'})
@@ -2199,7 +2188,7 @@ function buildProjectForm(p) {
   _curVoci   = Array.isArray(p.Voci_Bundle) ? p.Voci_Bundle.slice() : [];
   var today  = new Date().toISOString().split('T')[0];
   var clientTag = _selClient ? '<div class="selected-client-tag" id="sel-client-tag"><span>'+escH(_selClient.NomeCliente)+'</span><button onclick="clearSelClient()">×</button></div>' : '';
-  var teamChips = '<div class="team-select" id="team-chips">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(_selTeam.indexOf(m) !== -1 ? ' selected' : '')+'" onclick="toggleTeam(this,\''+m+'\')">'+m+'</div>'; }).join('')+'</div>';
+  var teamChips = '<div class="team-select" id="team-chips">'+teamMembers().map(function(m) { return '<div class="team-chip'+(_selTeam.indexOf(m) !== -1 ? ' selected' : '')+'" onclick="toggleTeam(this,\''+m+'\')">'+m+'</div>'; }).join('')+'</div>';
   var listinoNote = !_s.listinoLoaded ? '<div id="listino-loading-placeholder" class="listino-loading">⏳ Caricamento servizi in corso…</div>' : '';
   // Banner preventivo origine
   var prvBanner = '';
@@ -2304,7 +2293,7 @@ function renderVociBnd(voci) {
     + voci.map(function(vv, i) {
       return '<div class="voce-card"><div class="voce-card-header"><span class="voce-card-nome">'+escH(vv.nome)+'</span></div>'
         +'<div class="voce-card-body"><div class="field"><label>Compenso team (€)</label><input type="number" id="vbcomp-'+i+'" value="'+escH(String(vv.compenso||''))+'" placeholder="€"/></div>'
-        +'<div class="field"><label>Operatore</label><div class="team-select" id="vbteam-'+i+'">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="toggleVoceTeam(this,'+i+',\''+m+'\')">'+m+'</div>'; }).join('')+'</div></div>'
+        +'<div class="field"><label>Operatore</label><div class="team-select" id="vbteam-'+i+'">'+teamMembers().map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="toggleVoceTeam(this,'+i+',\''+m+'\')">'+m+'</div>'; }).join('')+'</div></div>'
         +buildCompensiEditor('prj', i)+'</div></div>';
     }).join('') + '</div></div>';
 }
@@ -2543,7 +2532,7 @@ function openCreaProgettoPanel(prevId) {
   var p = _s.preventivi.find(function(x) { return x.ID_Preventivo === prevId; }); if (!p) return;
   var today = new Date().toISOString().split('T')[0];
   var voci = Array.isArray(p.Voci) ? p.Voci : [];
-  var teamChips = '<div class="team-select" id="cpf-team">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip" onclick="toggleCPFTeam(this,\''+m+'\')">'+m+'</div>'; }).join('')+'</div>';
+  var teamChips = '<div class="team-select" id="cpf-team">'+teamMembers().map(function(m) { return '<div class="team-chip" onclick="toggleCPFTeam(this,\''+m+'\')">'+m+'</div>'; }).join('')+'</div>';
   document.getElementById('panel-title').innerHTML = '🚀 Crea Progetto da <span class="badge badge-gold" style="font-size:11px;margin-left:4px">'+escH(p.PreventivoCode)+'</span>';
   document.getElementById('panel-body').innerHTML =
     '<div style="background:rgba(200,169,110,.06);border:1px solid rgba(200,169,110,.2);border-radius:8px;padding:14px 16px;margin-bottom:20px;">'
@@ -2672,7 +2661,7 @@ function renderPrevVociList() {
     if (vv.prezzoListino > 0 && vv.prezzo !== vv.prezzoListino) { var diff = vv.prezzoListino - vv.prezzo; flagHtml = '<span class="voce-flag '+(diff > 0 ? 'sconto' : 'ok')+'">'+(diff > 0 ? '▼ €'+diff.toFixed(0)+' da listino' : '▲ Extra')+'</span>'; }
     return '<div class="voce-card"><div class="voce-card-header"><span class="voce-card-nome">'+escH(vv.nome)+'</span>'+flagHtml+'<button class="icon-btn del" onclick="removePrevVoce('+i+')" style="margin-left:auto" title="Rimuovi"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>'
       +'<div class="voce-card-body"><div class="field"><label>Prezzo (€) <span style="color:var(--text3)">[listino: €'+vv.prezzoListino+']</span></label><input type="number" id="pvp-'+i+'" value="'+vv.prezzo+'" oninput="updPrevVocePrezzo('+i+',this.value)"/></div>'
-      +'<div class="field"><label>Operatore</label><div class="team-select">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevOp('+i+',\''+m+'\',this)">'+m+'</div>'; }).join('')+'</div></div>'
+      +'<div class="field"><label>Operatore</label><div class="team-select">'+teamMembers().map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevOp('+i+',\''+m+'\',this)">'+m+'</div>'; }).join('')+'</div></div>'
       +buildCompensiEditor('prev', i)+'</div></div>';
   }).join('') + '</div>';
 }
@@ -2822,15 +2811,18 @@ function updCompensoImporto(scope, i, nome, val) {
 
 // [v8.4] Chip dei venditori attivi + chip "Vendita diretta" per azzerare.
 function buildVenditoreChips(sel) {
-  var attivi = venditoriAttivi();
+  // [v8.5] Legge dal registro Persone: il valore salvato in ID_Venditore e' ora
+  // un ID_Persona. I preventivi vecchi conservano un ID_Collaboratore, che
+  // saveProvvigione risolve comunque con un fallback lato backend.
+  var attivi = personeConRuolo(_s.ruoli, 'Venditore');
   if (!attivi.length) {
-    return '<div style="font-size:11px;color:var(--text3);padding:6px 0">Nessun venditore configurato. Aggiungine uno dal CRM → Trattative chiuse → Gestisci venditori.</div>';
+    return '<div style="font-size:11px;color:var(--text3);padding:6px 0">Nessun venditore configurato. Aggiungine uno dalla sezione Persone.</div>';
   }
   return '<div class="team-select" id="pvt-vend-chips">'
     + '<div class="team-chip'+(!sel?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevVenditore(\'\',this)">Vendita diretta</div>'
     + attivi.map(function(c) {
-        return '<div class="team-chip'+(sel===c.ID_Collaboratore?' selected':'')+'" style="padding:3px 8px;font-size:11px" '
-          + 'onclick="selPrevVenditore(\''+escAttr(c.ID_Collaboratore)+'\',this)">'
+        return '<div class="team-chip'+(sel===c.ID_Persona?' selected':'')+'" style="padding:3px 8px;font-size:11px" '
+          + 'onclick="selPrevVenditore(\''+escAttr(c.ID_Persona)+'\',this)">'
           + escH(c.Nome)+' <span style="opacity:.6">'+(parseFloat(c.Valore)||0)+'%</span></div>';
       }).join('')
     + '</div>';
@@ -3297,7 +3289,7 @@ function getEffectiveProjectDate(p, tipo) {
 // punto: un'altra deduzione prima di calcolare `netto`.
 function getRevenueAllocationsForProject(p, incassato, nomeVend, quotaVenditore) {
   var alloc = {};
-  TEAM_MEMBERS.forEach(function(m){ alloc[m] = 0; });
+  teamMembers().forEach(function(m){ alloc[m] = 0; });
 
   var quotaV = parseFloat(quotaVenditore) || 0;
   if (quotaV < 0) quotaV = 0;
@@ -4102,15 +4094,15 @@ function renderFonti() {
 function renderCaricoTeam(oggi) {
   var list = document.getElementById('dash-carico-team'); if (!list) return;
   var carichi = {};
-  TEAM_MEMBERS.forEach(function(m){ carichi[m] = []; });
+  teamMembers().forEach(function(m){ carichi[m] = []; });
   _s.projects.forEach(function(p) {
     if (p.Stato === 'CHIUSO' || !p.Assegnato_A) return;
     p.Assegnato_A.split(',').forEach(function(m) {
       m = m.trim(); if (carichi[m] !== undefined) carichi[m].push(p);
     });
   });
-  var maxC = Math.max(1, Math.max.apply(null, TEAM_MEMBERS.map(function(m){ return carichi[m].length; })));
-  list.innerHTML = TEAM_MEMBERS.map(function(m) {
+  var maxC = Math.max(1, Math.max.apply(null, teamMembers().map(function(m){ return carichi[m].length; })));
+  list.innerHTML = teamMembers().map(function(m) {
     var projs = carichi[m], cnt = projs.length;
     var pct = Math.round((cnt / maxC) * 100);
     var color = cnt === 0 ? 'var(--text3)' : cnt <= 2 ? 'var(--green)' : cnt <= 4 ? 'var(--amber)' : 'var(--red)';

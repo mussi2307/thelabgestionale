@@ -57,9 +57,10 @@ function loadApp() {
     main + '\n;__out.buildMovimenti=buildMovimenti;'
          + '__out.getRevenueAllocationsForProject=getRevenueAllocationsForProject;'
          + '__out.setState=function(s){_s=s;};'
-         + '__out.TEAM_MEMBERS=TEAM_MEMBERS;'
+         + '__out.TEAM_MEMBERS=teamMembers();'
          + '__out.beneficiariRicavi=beneficiariRicavi;'
          + '__out.assegnabiliCompenso=assegnabiliCompenso;'
+         + '__out.teamMembers=teamMembers;'
   );
   fn(sandbox.document, sandbox.window, sandbox.console, sandbox.fetch,
      sandbox.setTimeout, sandbox.clearTimeout, sandbox.setInterval,
@@ -75,7 +76,14 @@ function statoBase(provvigioni, progetti) {
     clients: [], preventivi: [], interazioni: {},
     projects: progetti,
     provvigioni: provvigioni,
-    collaboratori: [{ ID_Collaboratore: 'k1', Nome: 'Saso', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }],
+    persone: [],
+    ruoli: [
+    { Nome: 'Mussi', Ruolo: 'Team', Valore: 0, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Cream', Ruolo: 'Team', Valore: 0, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Pana', Ruolo: 'Team', Valore: 0, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Saso', Ruolo: 'Team', Valore: 0, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Saso', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  ],
     listino: { servizi: [], bundles: [] },
     obiettivi: { studio: 0, mussi: 0 }
   };
@@ -265,7 +273,7 @@ test('nessun movimento porta mai una quota negativa, su una batteria di casi', f
 test('beneficiariRicavi include i venditori esterni a TEAM_MEMBERS', function() {
   App.setState(statoBase([], [progettoBundle(100, 100)]));
   var b = App.beneficiariRicavi();
-  App.TEAM_MEMBERS.forEach(function(m) {
+  App.teamMembers().forEach(function(m) {
     assert.ok(b.indexOf(m) !== -1, 'manca l operatore fisso ' + m);
   });
   assert.ok(b.indexOf('Saso') !== -1, 'il venditore Saso deve comparire fra i beneficiari');
@@ -273,16 +281,21 @@ test('beneficiariRicavi include i venditori esterni a TEAM_MEMBERS', function() 
 
 test('beneficiariRicavi non duplica chi e sia operatore sia venditore', function() {
   var st = statoBase([], [progettoBundle(100, 100)]);
-  st.collaboratori = [{ ID_Collaboratore: 'k2', Nome: 'Mussi', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }];
+  // Mussi e' gia' Team da statoBase: qui gli si aggiunge anche Venditore.
+  // E' il caso che il test vuole davvero coprire.
+  st.ruoli = st.ruoli.concat([
+    { Nome: 'Mussi', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  ]);
   App.setState(st);
-  var b = App.beneficiariRicavi();
-  var n = b.filter(function(x){ return x === 'Mussi'; }).length;
+  assert.ok(App.teamMembers().indexOf('Mussi') !== -1, 'precondizione: Mussi e nel team');
+  assert.ok(App.beneficiariRicavi().indexOf('Mussi') !== -1, 'precondizione: e anche beneficiario');
+  var n = App.beneficiariRicavi().filter(function(x){ return x === 'Mussi'; }).length;
   assert.strictEqual(n, 1, 'Mussi non deve comparire due volte');
 });
 
 test('beneficiariRicavi esclude i venditori con Data_Fine passata', function() {
   var st = statoBase([], [progettoBundle(100, 100)]);
-  st.collaboratori = [{ ID_Collaboratore: 'k3', Nome: 'Uscito', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
+  st.ruoli = [{ Nome: 'Uscito', Ruolo: 'Venditore', Valore: 10, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
   App.setState(st);
   assert.ok(App.beneficiariRicavi().indexOf('Uscito') === -1, 'un venditore chiuso non deve comparire nei selettori');
 });
@@ -306,9 +319,7 @@ function progettoConCompensi(acc, sal) {
 
 function statoConTecnico(provvigioni, progetti) {
   var st = statoBase(provvigioni, progetti);
-  st.collaboratori = st.collaboratori.concat([
-    { ID_Collaboratore: 'k9', Nome: 'Luca', Ruolo: 'Tecnico_Occasionale', Valore: 40, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
-  ]);
+  st.ruoli = st.ruoli.concat([{ Nome: 'Luca', Ruolo: 'Fonico', Valore: 40, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }]);
   return st;
 }
 
@@ -371,8 +382,8 @@ test('un tecnico occasionale compare fra i beneficiari disegnati', function() {
 test('assegnabiliCompenso: operatori fissi piu tecnici occasionali, senza TheLab', function() {
   var st = statoConTecnico([], [progettoConCompensi(100, 100)]);
   // Venditore puro, NON presente in TEAM_MEMBERS: e' il caso che isola il ruolo.
-  st.collaboratori = st.collaboratori.concat([
-    { ID_Collaboratore: 'k7', Nome: 'Giada', Ruolo: 'Venditore', Valore: 12, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  st.ruoli = st.ruoli.concat([
+    { Nome: 'Giada', Ruolo: 'Venditore', Valore: 12, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
   ]);
   App.setState(st);
   var a = App.assegnabiliCompenso();
@@ -387,7 +398,44 @@ test('assegnabiliCompenso: operatori fissi piu tecnici occasionali, senza TheLab
 
 test('assegnabiliCompenso: un tecnico chiuso con Data_Fine sparisce', function() {
   var st = statoBase([], [progettoConCompensi(100, 100)]);
-  st.collaboratori = [{ ID_Collaboratore: 'k8', Nome: 'Uscito', Ruolo: 'Tecnico_Occasionale', Valore: 20, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
+  st.ruoli = [{ Nome: 'Uscito', Ruolo: 'Fonico', Valore: 20, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
   App.setState(st);
   assert.ok(App.assegnabiliCompenso().indexOf('Uscito') === -1);
+});
+
+// ── Registro persone: il fallback e lo storico ───────────────
+
+test('teamMembers: senza registro torna la lista storica', function() {
+  var st = statoBase([], [progettoBundle(100, 100)]);
+  st.ruoli = [];
+  App.setState(st);
+  assert.deepStrictEqual(App.teamMembers(), ['Mussi','Cream','Pana','Saso','TheLab'],
+    'senza backend aggiornato l app deve continuare a funzionare');
+});
+
+test('teamMembers: col registro usa i ruoli Team piu TheLab', function() {
+  var st = statoBase([], [progettoBundle(100, 100)]);
+  st.ruoli = [
+    { Nome: 'Mussi', Ruolo: 'Team', Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Nuovo', Ruolo: 'Team', Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' },
+    { Nome: 'Luca',  Ruolo: 'Fonico', Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  ];
+  App.setState(st);
+  var t = App.teamMembers();
+  assert.ok(t.indexOf('Nuovo') !== -1, 'un membro aggiunto dal registro compare');
+  assert.ok(t.indexOf('Luca') === -1, 'un fonico non e un membro del team');
+  assert.ok(t.indexOf('TheLab') !== -1, 'TheLab resta sempre in coda');
+});
+
+test('un membro chiuso resta nello storico contabile', function() {
+  var st = statoBase([], [progettoBundle(100, 100)]);
+  // Cream ha eseguito la voce, ma il suo ruolo Team e' chiuso da anni
+  st.ruoli = [{ Nome: 'Cream', Ruolo: 'Team', Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
+  App.setState(st);
+  assert.ok(App.teamMembers().indexOf('Cream') === -1, 'sparisce dai selettori');
+  var tot = {};
+  App.buildMovimenti().forEach(function(m) {
+    Object.keys(m.allocazioni).forEach(function(k){ tot[k] = (tot[k]||0) + m.allocazioni[k]; });
+  });
+  assert.strictEqual(tot.Cream, 200, 'ma i suoi incassi passati restano attribuiti a lui');
 });
