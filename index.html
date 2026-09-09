@@ -663,6 +663,14 @@ td.soon{color:var(--amber);}
    selezionabili accanto — non e' un nome, e' un'azione. */
 .cmp-add{border-style:dashed!important;opacity:.75;}
 .cmp-add:hover{opacity:1;border-color:var(--gold)!important;color:var(--gold);}
+/* [v8.5] Sezione Persone. La riga di un ruolo chiuso resta visibile ma
+   smorzata: e' storia, non un errore da nascondere. */
+.pers-card{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;}
+.pers-chiuso{opacity:.45;}
+.pers-nome{font-weight:600;font-size:14px;}
+.pers-ruoli{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;}
+.pers-val{font-size:12px;color:var(--gold);font-weight:600;white-space:nowrap;}
+.pers-meta{font-size:11px;color:var(--text3);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -688,6 +696,10 @@ td.soon{color:var(--amber);}
       <button class="nav-item" id="nav-crm" onclick="showPage('crm')">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2.5"/><path d="M1 13c0-2.8 2.2-5 5-5h.5M12 14v-4M10 12h4"/></svg>
         CRM Clienti
+      </button>
+      <button class="nav-item" id="nav-persone" onclick="showPage('persone')">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2.5"/><path d="M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><circle cx="12" cy="5.5" r="2"/><path d="M11 9.2c2 .3 3.5 1.7 3.5 3.8"/></svg>
+        Persone
       </button>
       <button class="nav-item" id="nav-projects" onclick="showPage('projects')">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M5 7h6M5 10h4"/></svg>
@@ -812,6 +824,27 @@ td.soon{color:var(--amber);}
             <div style="font-size:12px;color:var(--text3);margin-top:6px">Una trattativa compare qui quando il cliente e' in pipeline "Chiuso ✓" e ha un preventivo accettato.</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- PERSONE -->
+    <div id="page-persone" class="page-section">
+      <div class="page-header">
+        <div class="page-title">Persone</div>
+        <button class="btn btn-primary" onclick="openNuovaPersonaPanel()">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 1v12M1 7h12"/></svg>
+          Nuova Persona
+        </button>
+      </div>
+      <div class="page-content">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchPersoneTab('Team',this)">Membri del team</button>
+          <button class="tab-btn" onclick="switchPersoneTab('Fonico',this)">Fonici</button>
+          <button class="tab-btn" onclick="switchPersoneTab('Venditore',this)">Venditori</button>
+          <button class="tab-btn" onclick="switchPersoneTab('Affittuario',this)">Affittuari</button>
+        </div>
+        <div id="persone-cont"></div>
+        <div id="persone-empty" class="empty-state" style="display:none"></div>
       </div>
     </div>
 
@@ -1287,6 +1320,7 @@ function showPage(page) {
   var ni = document.getElementById('nav-' + page); if (ni) ni.classList.add('active');
   if (page === 'projects' && !_s.projects.length && !_s.loadingProjects) loadProjects();
   if (page === 'bundle'   && !_s.preventivi.length && !_s.loadingBundle) loadPreventivi();
+  if (page === 'persone') loadPersone(function(){ renderPersone(); });
   if (page === 'contabilita') {
     ensureProjectsLoaded(function(){
       ensurePreventivi(function(){
@@ -1575,6 +1609,241 @@ function renderClientsTable() {
       +'<td class="'+dcc+'">'+(c.ProssimaAzione?'<span style="font-size:11px;opacity:.7">'+escH(c.ProssimaAzione.substring(0,25))+'</span><br>':'')+dc+'</td>'
       +'<td><div class="td-actions"><button class="icon-btn" onclick="event.stopPropagation();openEditClientPanel(\''+id+'\')" title="Modifica"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3L11 2z"/></svg></button>'+del+'</div></td></tr>';
   }).join('');
+}
+
+// ── SEZIONE PERSONE ──────────────────────────────────────────
+// [v8.5] Quattro viste sullo stesso registro. Una persona compare in tutte
+// quelle in cui ha un ruolo: Mussi puo' essere team, fonico, venditore e
+// affittuario insieme.
+
+var _personeTab = 'Team';
+
+var RUOLI_LABEL = {
+  'Team':'Membro del team', 'Fonico':'Fonico',
+  'Venditore':'Venditore', 'Affittuario':'Affittuario'
+};
+var RUOLI_BADGE = {
+  'Team':'badge-gold', 'Fonico':'badge-teal',
+  'Venditore':'badge-purple', 'Affittuario':'badge-blue'
+};
+
+function switchPersoneTab(tab, el) {
+  document.querySelectorAll('#page-persone .tab-btn').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  _personeTab = tab;
+  renderPersone();
+}
+
+// Unita' di misura del Valore: percentuale per il venditore, euro per il
+// fonico, niente per gli altri due.
+function _unitaRuolo(ruolo, valore) {
+  var v = parseFloat(valore) || 0;
+  if (ruolo === 'Venditore') return v ? v + '%' : '—';
+  if (ruolo === 'Fonico')    return v ? '€ ' + v.toFixed(2) : '—';
+  return '';
+}
+
+function renderPersone() {
+  var cont = document.getElementById('persone-cont');
+  var em = document.getElementById('persone-empty');
+  if (!cont) return;
+
+  var oggi = new Date().toISOString().split('T')[0];
+  var righe = (_s.ruoli || []).filter(function(r){ return r && r.Ruolo === _personeTab; });
+  righe.sort(function(a,b){ return String(a.Nome||'').localeCompare(String(b.Nome||'')); });
+
+  if (!righe.length) {
+    cont.innerHTML = '';
+    if (em) {
+      em.style.display = 'block';
+      var extra = _personeTab === 'Affittuario'
+        ? '<div style="font-size:12px;color:var(--text3);margin-top:6px">Gli affittuari si aggiungono dal modulo Stabile, dove vivono sala, modello di contribuzione e chiavi.</div>'
+        : '<button class="btn btn-primary btn-sm" onclick="openNuovaPersonaPanel()">+ Aggiungi una persona</button>';
+      em.innerHTML = '<p>Nessuno con il ruolo "'+escH(RUOLI_LABEL[_personeTab])+'"</p>' + extra;
+    }
+    return;
+  }
+  if (em) em.style.display = 'none';
+
+  cont.innerHTML = righe.map(function(r) {
+    var attivo = attivoIl(r, oggi);
+    var altri = (_s.ruoli || []).filter(function(x) {
+      return x.ID_Persona && x.ID_Persona === r.ID_Persona && x.Ruolo !== r.Ruolo && attivoIl(x, oggi);
+    }).map(function(x) {
+      return '<span class="badge '+RUOLI_BADGE[x.Ruolo]+'" style="font-size:10px">'+escH(RUOLI_LABEL[x.Ruolo])+'</span>';
+    }).join(' ');
+
+    var val = _unitaRuolo(r.Ruolo, r.Valore);
+    var df = String(r.Data_Fine || '').split('T')[0];
+    var meta = attivo
+      ? (df && df !== '2099-12-31' ? 'Attivo fino al ' + fmtDate(df) : 'Attivo')
+      : 'Chiuso il ' + fmtDate(df);
+
+    // L'affittuario si governa dal modulo Stabile: qui e' in sola lettura,
+    // per non avere due posti che scrivono lo stesso dato.
+    var azioni;
+    if (r.Ruolo === 'Affittuario') {
+      azioni = '<button class="btn btn-ghost btn-sm" onclick="showPage(\'stabile\')">Apri Stabile →</button>';
+    } else if (attivo) {
+      azioni = '<button class="btn btn-ghost btn-sm" onclick="apriRuoloPanel(\''+escAttr(r.ID_Persona)+'\',\''+escAttr(r.Ruolo)+'\')">Modifica</button>'
+        + '<button class="btn btn-ghost btn-sm" onclick="chiudiRuolo(\''+escAttr(r.ID_Ruolo)+'\',\''+escAttr(r.Nome)+'\',\''+escAttr(r.Ruolo)+'\')">Chiudi</button>';
+    } else {
+      azioni = '<button class="btn btn-ghost btn-sm" onclick="apriRuoloPanel(\''+escAttr(r.ID_Persona)+'\',\''+escAttr(r.Ruolo)+'\')">Riapri</button>';
+    }
+
+    return '<div class="pers-card'+(attivo ? '' : ' pers-chiuso')+'">'
+      + '<div style="flex:1;min-width:0">'
+      +   '<div class="pers-nome">'+escH(r.Nome)+'</div>'
+      +   (altri ? '<div class="pers-ruoli">'+altri+'</div>' : '')
+      +   '<div class="pers-meta">'+escH(meta)+'</div>'
+      + '</div>'
+      + (val ? '<div class="pers-val">'+escH(val)+'</div>' : '')
+      + '<div style="display:flex;gap:6px">'+azioni+'</div>'
+      + '</div>';
+  }).join('');
+}
+
+function openNuovaPersonaPanel() {
+  document.getElementById('panel-title').innerHTML = 'Nuova persona';
+  document.getElementById('panel-body').innerHTML =
+    fs('Identita',
+      '<div class="field"><label class="field-required">Nome</label>'
+      + '<input type="text" id="np-nome" placeholder="es. Luca"/>'
+      + '<div style="font-size:11px;color:var(--text3);margin-top:6px">Il nome non sara\' modificabile: e\' la chiave con cui lo storico contabile punta alla persona.</div></div>'
+      + '<div class="field" style="margin-top:10px"><label>Note</label><input type="text" id="np-note" placeholder="facoltative"/></div>')
+    + fs('Ruoli iniziali',
+      '<div class="team-select" id="np-ruoli">'
+      + ['Team','Fonico','Venditore'].map(function(r) {
+          return '<div class="team-chip" style="padding:4px 10px;font-size:11px" onclick="this.classList.toggle(\'selected\')" data-ruolo="'+r+'">'+escH(RUOLI_LABEL[r])+'</div>';
+        }).join('')
+      + '</div>'
+      + '<div class="field" style="margin-top:10px"><label>Valore (% per il venditore, € per il fonico)</label>'
+      + '<input type="number" id="np-valore" min="0" step="0.5" value="0"/></div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-top:8px">L\'affittuario si aggiunge dal modulo Stabile, dove vivono sala, modello di contribuzione e chiavi.</div>');
+  document.getElementById('panel-footer').innerHTML =
+    '<div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="closePanel()">Annulla</button>'
+    + '<button class="btn btn-primary" id="submit-btn" onclick="submitNuovaPersona()">Crea</button></div>';
+  openPanel();
+}
+
+function submitNuovaPersona() {
+  var nome = (document.getElementById('np-nome') || {}).value || '';
+  nome = nome.trim();
+  if (!nome) { showToast('Inserisci il nome', 'error'); return; }
+  var note = (document.getElementById('np-note') || {}).value || '';
+  var valore = parseFloat((document.getElementById('np-valore') || {}).value) || 0;
+  var scelti = [];
+  document.querySelectorAll('#np-ruoli .team-chip.selected').forEach(function(c) {
+    scelti.push(c.getAttribute('data-ruolo'));
+  });
+
+  setLoading(true);
+  apiPost({ action: 'savePersona', Nome: nome, Note: note }).then(function(p) {
+    // I ruoli si creano in sequenza: sono scritture separate sullo stesso
+    // foglio e Apps Script non ha transazioni.
+    var catena = Promise.resolve();
+    scelti.forEach(function(r) {
+      catena = catena.then(function() {
+        return apiPost({ action: 'saveRuolo', ID_Persona: p.ID_Persona, Ruolo: r, Valore: valore });
+      });
+    });
+    return catena;
+  }).then(function() {
+    loadPersone(function() {
+      setLoading(false);
+      renderPersone();
+      try { refreshAnalyticsViews(); } catch (e) {}
+      closePanel();
+      showToast('Persona creata', 'success');
+    });
+  }).catch(function(e) {
+    setLoading(false);
+    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+  });
+}
+
+// Aggiunge o modifica un ruolo su una persona che esiste gia'.
+function apriRuoloPanel(idPersona, ruolo) {
+  var pers = (_s.persone || []).find(function(p){ return p.ID_Persona === idPersona; });
+  var esistente = (_s.ruoli || []).find(function(r) {
+    return r.ID_Persona === idPersona && r.Ruolo === ruolo;
+  });
+  var nome = pers ? pers.Nome : (esistente ? esistente.Nome : '');
+  if (!nome) { showToast('Persona non trovata', 'error'); return; }
+  var val = esistente ? (parseFloat(esistente.Valore) || 0) : 0;
+  var df = esistente ? (String(esistente.Data_Fine || '2099-12-31').split('T')[0] || '2099-12-31') : '2099-12-31';
+
+  document.getElementById('panel-title').innerHTML = escH(nome) + ' — ' + escH(RUOLI_LABEL[ruolo]);
+  document.getElementById('panel-body').innerHTML =
+    fs('Ruolo',
+      '<input type="hidden" id="ru-idpersona" value="'+escAttr(idPersona)+'"/>'
+      + '<input type="hidden" id="ru-ruolo" value="'+escAttr(ruolo)+'"/>'
+      + '<input type="hidden" id="ru-idruolo" value="'+escAttr(esistente ? esistente.ID_Ruolo : '')+'"/>'
+      + '<div class="field-grid">'
+      + '<div class="field"><label>'+(ruolo === 'Venditore' ? 'Percentuale (%)' : 'Compenso predefinito (€)')+'</label>'
+      +   '<input type="number" id="ru-valore" min="0" step="0.5" value="'+val+'"/></div>'
+      + '<div class="field"><label>Attivo fino al</label><input type="date" id="ru-fine" value="'+escAttr(df)+'"/></div>'
+      + '</div>'
+      + '<div style="font-size:11px;color:var(--text3);margin-top:8px">Lasciare 31/12/2099 per un ruolo senza scadenza.</div>');
+  document.getElementById('panel-footer').innerHTML =
+    '<div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="closePanel()">Annulla</button>'
+    + '<button class="btn btn-primary" id="submit-btn" onclick="submitRuolo()">Salva</button></div>';
+  openPanel();
+}
+
+function submitRuolo() {
+  var ruolo = v('ru-ruolo');
+  var valore = parseFloat(v('ru-valore')) || 0;
+  if (valore < 0) { showToast('Il valore non puo\' essere negativo', 'error'); return; }
+  if (ruolo === 'Venditore' && valore > 100) { showToast('La percentuale deve stare fra 0 e 100', 'error'); return; }
+
+  var payload = {
+    action: 'saveRuolo',
+    ID_Persona: v('ru-idpersona'),
+    Ruolo: ruolo,
+    Valore: valore,
+    Data_Fine: v('ru-fine') || '2099-12-31'
+  };
+  var idr = v('ru-idruolo');
+  if (idr) payload.ID_Ruolo = idr;
+
+  setLoading(true);
+  apiPost(payload).then(function() {
+    loadPersone(function() {
+      setLoading(false);
+      renderPersone();
+      try { refreshAnalyticsViews(); } catch (e) {}
+      closePanel();
+      showToast('Ruolo salvato', 'success');
+    });
+  }).catch(function(e) {
+    setLoading(false);
+    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+  });
+}
+
+// Chiude il ruolo a una data. Non cancella: dal giorno dopo la persona sparisce
+// da chip e selettori, ma i movimenti gia' registrati a suo nome restano.
+function chiudiRuolo(idRuolo, nome, ruolo) {
+  var oggi = new Date().toISOString().split('T')[0];
+  var d = prompt('Da quale data ' + nome + ' non e\' piu\' ' + RUOLI_LABEL[ruolo].toLowerCase()
+    + '?\n\nFormato aaaa-mm-gg. Restera\' selezionabile fino a quel giorno incluso;\ni dati storici non vengono toccati.', oggi);
+  if (!d) return;
+  d = String(d).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { showToast('Data non valida: usa aaaa-mm-gg', 'error'); return; }
+
+  setLoading(true);
+  apiPost({ action: 'deleteRuolo', ID_Ruolo: idRuolo, Data_Fine: d }).then(function() {
+    loadPersone(function() {
+      setLoading(false);
+      renderPersone();
+      try { refreshAnalyticsViews(); } catch (e) {}
+      showToast(nome + ' chiuso come ' + RUOLI_LABEL[ruolo].toLowerCase() + ' dal ' + d, 'success');
+    });
+  }).catch(function(e) {
+    setLoading(false);
+    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+  });
 }
 
 // ── TRATTATIVE CHIUSE / PROVVIGIONI ──────────────────────────
