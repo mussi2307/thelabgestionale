@@ -19,7 +19,10 @@ function loadTestable() {
     'ritagliaProvvigione',
     'trovaProvvigioneProgetto',
     'buildTrattativeChiuse',
-    'allocaVoci'
+    'allocaVoci',
+    'attivoIl',
+    'personeConRuolo',
+    'nomiConRuolo'
   ];
   var out = {};
   var fn = new Function('__out', src + '\n;' + exported.map(function(n){

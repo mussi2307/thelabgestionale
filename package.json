@@ -4,6 +4,6 @@
   "private": true,
   "description": "Gestionale interno THE LAB. Nessuna dipendenza: package.json esiste solo per dare un comando ai test.",
   "scripts": {
-    "test": "node --test tests/provvigioni.test.js tests/trattative.test.js tests/integrazione.test.js tests/compensi.test.js"
+    "test": "node --test tests/provvigioni.test.js tests/trattative.test.js tests/integrazione.test.js tests/compensi.test.js tests/persone.test.js"
   }
 }

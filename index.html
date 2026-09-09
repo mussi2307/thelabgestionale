@@ -3247,6 +3247,38 @@ function allocaVoci(voci, incassato) {
   return alloc;
 }
 
+// [v8.5] Finestra di validita' di un record datato. Unica implementazione:
+// prima lo stesso confronto era ripetuto in venditoriAttivi(),
+// tecniciOccasionaliAttivi() e in due punti del backend.
+// Le date arrivano da Sheets come "yyyy-MM-dd" o come ISO completo: il confronto
+// lessicografico sui primi 10 caratteri coincide con quello cronologico.
+function attivoIl(rec, isoGiorno) {
+  if (!rec) return false;
+  var g = String(isoGiorno || new Date().toISOString()).split('T')[0];
+  var di = String(rec.Data_Inizio || '').split('T')[0] || '2000-01-01';
+  var df = String(rec.Data_Fine || '').split('T')[0] || '2099-12-31';
+  return di <= g && g <= df;
+}
+
+// Righe di Persone_Ruoli che hanno quel ruolo e sono valide in quella data.
+function personeConRuolo(ruoli, ruolo, isoGiorno) {
+  if (!ruoli || !ruoli.length) return [];
+  return ruoli.filter(function(r) {
+    return r && r.Ruolo === ruolo && attivoIl(r, isoGiorno);
+  });
+}
+
+// Solo i nomi, unici e ordinati. E' la forma che serve a chip e select.
+function nomiConRuolo(ruoli, ruolo, isoGiorno) {
+  var out = [];
+  personeConRuolo(ruoli, ruolo, isoGiorno).forEach(function(r) {
+    var n = String(r.Nome || '').trim();
+    if (n && out.indexOf(n) === -1) out.push(n);
+  });
+  out.sort();
+  return out;
+}
+
 // TESTABLE:PROVVIGIONI>>>
 
 function getEffectiveProjectDate(p, tipo) {
