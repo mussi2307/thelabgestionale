@@ -18,7 +18,8 @@ function loadTestable() {
     'provvigioneDovuta',
     'ritagliaProvvigione',
     'trovaProvvigioneProgetto',
-    'buildTrattativeChiuse'
+    'buildTrattativeChiuse',
+    'allocaVoci'
   ];
   var out = {};
   var fn = new Function('__out', src + '\n;' + exported.map(function(n){

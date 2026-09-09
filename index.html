@@ -1183,7 +1183,7 @@ var PREV_STATO = {
 };
 // [v4-01] TheLab aggiunto come operatore
 var TEAM_MEMBERS = ["Mussi","Cream","Pana","Saso","TheLab"];
-var FONTE_OPTIONS = ["Instagram","TikTok","YouTube","Passaparola","Sito web","Facebook","Altro"];
+var FONTE_OPTIONS = ["Instagram","TikTok","YouTube","Passaparola","Sito web","Google Maps","Facebook","Altro"];
 var MESI_LABELS = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
 
 // [v8.3-07] Tipologia cliente — deve restare allineata a TIPO_CLIENTE_VALIDI nel backend
@@ -2943,6 +2943,84 @@ function buildTrattativeChiuse(clients, preventivi, provvigioni, collaboratori, 
   return out;
 }
 
+// [v8.4] Prezzo di una voce: il campo storico e' `prezzo`, ma i bundle di
+// listino compilati a mano usano `compenso`. Entrambi gia' in giro nei dati.
+function _prezzoVoce(vv) {
+  return parseFloat((vv && (vv.prezzo !== undefined && vv.prezzo !== '' ? vv.prezzo : vv.compenso)) || 0) || 0;
+}
+
+// Compensi validi di una voce: nome non vuoto e importo positivo.
+// Tutto il resto (righe abbozzate, importi negativi, zero) viene ignorato.
+function _compensiValidi(vv) {
+  var arr = (vv && Array.isArray(vv.compensi)) ? vv.compensi : [];
+  return arr.filter(function(c) {
+    return c && String(c.nome || '').trim() && (parseFloat(c.importo) || 0) > 0;
+  });
+}
+
+// Ripartisce l'incassato fra le voci del progetto, voce per voce.
+//
+// Partecipa una voce con prezzo > 0 che abbia compensi espliciti OPPURE un
+// operatore. Il denominatore e' la somma delle sole voci partecipanti: una
+// voce senza nessuno assegnato non diluisce la quota delle altre. E' il
+// comportamento storico dell'app e va preservato, o la contabilita' dei
+// progetti gia' a sistema cambierebbe da sola.
+//
+// Dentro la quota di ogni voce:
+//   - con compensi espliciti -> a ciascuno la sua frazione del prezzo voce,
+//     il resto allo Studio. La somma dei compensi non puo' superare il prezzo
+//     della voce: se lo supera, si scala in proporzione invece di sforare.
+//   - solo operatore -> tutta la quota a lui, come da sempre.
+//
+// Ritorna null se nessuna voce partecipa: il chiamante ricade sulla logica
+// successiva (Assegnato_A, poi Studio).
+function allocaVoci(voci, incassato) {
+  var arr = Array.isArray(voci) ? voci : [];
+  var inc = parseFloat(incassato) || 0;
+  if (inc < 0) inc = 0;
+
+  var partecipanti = arr.filter(function(vv) {
+    if (_prezzoVoce(vv) <= 0) return false;
+    return _compensiValidi(vv).length > 0 || String((vv && vv.operatore) || '').trim() !== '';
+  });
+  if (!partecipanti.length) return null;
+
+  var totale = partecipanti.reduce(function(s, vv) { return s + _prezzoVoce(vv); }, 0);
+  if (totale <= 0) return null;
+
+  var alloc = {};
+  function add(nome, q) {
+    if (!nome || !(q > 0)) return;
+    if (alloc[nome] === undefined) alloc[nome] = 0;
+    alloc[nome] += q;
+  }
+
+  partecipanti.forEach(function(vv) {
+    var prezzo = _prezzoVoce(vv);
+    var quotaVoce = (prezzo / totale) * inc;
+    var comp = _compensiValidi(vv);
+
+    if (!comp.length) {
+      add(String(vv.operatore).trim(), quotaVoce);
+      return;
+    }
+
+    var sommaComp = comp.reduce(function(s, c) { return s + (parseFloat(c.importo) || 0); }, 0);
+    // Oltre il prezzo della voce non si distribuisce: si scalano le quote
+    // mantenendone le proporzioni reciproche.
+    var scala = sommaComp > prezzo ? (prezzo / sommaComp) : 1;
+    var assegnato = 0;
+    comp.forEach(function(c) {
+      var q = (parseFloat(c.importo) || 0) * scala / prezzo * quotaVoce;
+      assegnato += q;
+      add(String(c.nome).trim(), q);
+    });
+    add('TheLab', quotaVoce - assegnato);
+  });
+
+  return alloc;
+}
+
 // TESTABLE:PROVVIGIONI>>>
 
 function getEffectiveProjectDate(p, tipo) {
@@ -2973,21 +3051,17 @@ function getRevenueAllocationsForProject(p, incassato, nomeVend, quotaVenditore)
   }
   incassato = netto;
 
-  var voci = Array.isArray(p.Voci_Bundle) ? p.Voci_Bundle : [];
-  var vociConOperatore = voci.filter(function(vv){
-    return (parseFloat(vv.prezzo || vv.compenso || 0) || 0) > 0 && String(vv.operatore || '').trim();
-  });
-
-  if (vociConOperatore.length) {
-    var totalVoci = vociConOperatore.reduce(function(s, vv){ return s + (parseFloat(vv.prezzo || vv.compenso || 0) || 0); }, 0);
-    if (totalVoci > 0) {
-      vociConOperatore.forEach(function(vv){
-        var op = String(vv.operatore || '').trim();
-        if (alloc[op] === undefined) alloc[op] = 0;
-        alloc[op] += ((parseFloat(vv.prezzo || vv.compenso || 0) || 0) / totalVoci) * incassato;
-      });
-      return alloc;
-    }
+  // [v8.4] Livello 1, ora in allocaVoci(): gestisce sia i compensi espliciti
+  // per tecnico sia il vecchio campo operatore, con la stessa regola sul
+  // denominatore di prima. Ritorna null quando nessuna voce partecipa, e in
+  // quel caso si scende ai due livelli storici qui sotto.
+  var perVoci = allocaVoci(p.Voci_Bundle, incassato);
+  if (perVoci) {
+    Object.keys(perVoci).forEach(function(nome){
+      if (alloc[nome] === undefined) alloc[nome] = 0;
+      alloc[nome] += perVoci[nome];
+    });
+    return alloc;
   }
 
   var assigned = getProjectAssignedMembers(p);
