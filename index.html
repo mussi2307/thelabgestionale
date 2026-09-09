@@ -659,6 +659,10 @@ td.soon{color:var(--amber);}
 /* [v8.4] Totalizzatore dei compensi assegnati a una voce. */
 .cmp-tot{font-size:10px;color:var(--text3);margin-top:6px;}
 .cmp-over{color:var(--red);}
+/* [v8.4] Chip di aggiunta: tratteggiata, per non confonderla con le persone
+   selezionabili accanto — non e' un nome, e' un'azione. */
+.cmp-add{border-style:dashed!important;opacity:.75;}
+.cmp-add:hover{opacity:1;border-color:var(--gold)!important;color:var(--gold);}
 </style>
 </head>
 <body>
@@ -2719,10 +2723,68 @@ function buildCompensiEditor(scope, i) {
   }).join('');
 
   return '<div class="field" id="cmp-box-'+scope+'-'+i+'"><label>Compensi</label>'
-    + '<div class="team-select">'+chips+'</div>'
+    + '<div class="team-select">'+chips
+    // [v8.4] Aggiunta al volo: un fonico nuovo si registra da qui, senza uscire
+    // dal preventivo che stai compilando. Non si puo' aprire il pannello
+    // collaboratori da qui — vive nello stesso side panel e cancellerebbe il form.
+    + '<div class="team-chip cmp-add" style="padding:3px 8px;font-size:11px" '
+    +   'onclick="mostraNuovoTecnico(\''+scope+'\','+i+')">+ Nuovo tecnico</div>'
+    + '</div>'
+    + '<div id="cmp-new-'+scope+'-'+i+'"></div>'
     + righe
     + '<div class="cmp-tot" id="cmp-tot-'+scope+'-'+i+'">'+_testoTotaleCompensi(scope, i)+'</div>'
     + '</div>';
+}
+
+function mostraNuovoTecnico(scope, i) {
+  var box = document.getElementById('cmp-new-' + scope + '-' + i);
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }   // secondo click: chiude
+  box.innerHTML = '<div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">'
+    + '<input class="provv-input" style="width:120px" type="text" id="nt-nome-'+scope+'-'+i+'" placeholder="Nome fonico"/>'
+    + '<input class="provv-input" type="number" min="0" step="0.5" id="nt-val-'+scope+'-'+i+'" placeholder="€ default"/>'
+    + '<button class="btn btn-primary btn-sm" onclick="salvaNuovoTecnico(\''+scope+'\','+i+')">Aggiungi</button>'
+    + '<button class="btn btn-ghost btn-sm" onclick="mostraNuovoTecnico(\''+scope+'\','+i+')">Annulla</button>'
+    + '</div>'
+    + '<div class="cmp-tot">Viene registrato come tecnico occasionale e assegnato subito a questa voce.</div>';
+  var f = document.getElementById('nt-nome-' + scope + '-' + i);
+  if (f) f.focus();
+}
+
+function salvaNuovoTecnico(scope, i) {
+  var nome = (document.getElementById('nt-nome-' + scope + '-' + i) || {}).value || '';
+  nome = nome.trim();
+  if (!nome) { showToast('Inserisci il nome del tecnico', 'error'); return; }
+  var gia = assegnabiliCompenso().indexOf(nome) !== -1;
+  if (gia) { showToast('"' + nome + '" e\' gia\' fra gli assegnabili', 'error'); return; }
+  var val = parseFloat((document.getElementById('nt-val-' + scope + '-' + i) || {}).value) || 0;
+  if (val < 0) { showToast('Il compenso non puo\' essere negativo', 'error'); return; }
+
+  setLoading(true);
+  apiPost({
+    action: 'saveCollaboratore',
+    Nome: nome,
+    Ruolo: 'Tecnico_Occasionale',
+    Modello_Compenso: 'Fisso_Per_Servizio',
+    Valore: val
+  }).then(function() {
+    loadCollaboratori(function() {
+      setLoading(false);
+      // Lo assegno subito alla voce: se lo stai creando qui, e' perche' ti serve ora.
+      var comp = _compensiVoce(scope, i);
+      var presente = false;
+      for (var k = 0; k < comp.length; k++) {
+        if (String(comp[k].nome || '').trim() === nome) { presente = true; break; }
+      }
+      if (!presente) comp.push({ nome: nome, importo: val > 0 ? val : '' });
+      var box = document.getElementById('cmp-box-' + scope + '-' + i);
+      if (box) box.outerHTML = buildCompensiEditor(scope, i);
+      showToast('Tecnico "' + nome + '" aggiunto', 'success');
+    });
+  }).catch(function(e) {
+    setLoading(false);
+    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+  });
 }
 
 function _testoTotaleCompensi(scope, i) {

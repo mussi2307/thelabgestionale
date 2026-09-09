@@ -59,6 +59,7 @@ function loadApp() {
          + '__out.setState=function(s){_s=s;};'
          + '__out.TEAM_MEMBERS=TEAM_MEMBERS;'
          + '__out.beneficiariRicavi=beneficiariRicavi;'
+         + '__out.assegnabiliCompenso=assegnabiliCompenso;'
   );
   fn(sandbox.document, sandbox.window, sandbox.console, sandbox.fetch,
      sandbox.setTimeout, sandbox.clearTimeout, sandbox.setInterval,
@@ -365,4 +366,28 @@ test('un tecnico occasionale compare fra i beneficiari disegnati', function() {
   var b = App.beneficiariRicavi();
   assert.ok(b.indexOf('Luca') !== -1, 'il tecnico occasionale deve essere disegnato');
   assert.ok(b.indexOf('Saso') !== -1, 'il venditore pure');
+});
+
+test('assegnabiliCompenso: operatori fissi piu tecnici occasionali, senza TheLab', function() {
+  var st = statoConTecnico([], [progettoConCompensi(100, 100)]);
+  // Venditore puro, NON presente in TEAM_MEMBERS: e' il caso che isola il ruolo.
+  st.collaboratori = st.collaboratori.concat([
+    { ID_Collaboratore: 'k7', Nome: 'Giada', Ruolo: 'Venditore', Valore: 12, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  ]);
+  App.setState(st);
+  var a = App.assegnabiliCompenso();
+  assert.ok(a.indexOf('Luca') !== -1, 'il tecnico occasionale deve essere assegnabile');
+  assert.ok(a.indexOf('Mussi') !== -1, 'gli operatori fissi restano assegnabili');
+  assert.ok(a.indexOf('TheLab') === -1, 'lo Studio non e una persona da pagare');
+  assert.ok(a.indexOf('Giada') === -1, 'un venditore puro e pagato a provvigione, non a compenso');
+  // Saso invece c'e': e' in TEAM_MEMBERS, quindi esegue servizi. Fare anche il
+  // venditore non gli toglie il diritto a un compenso per il lavoro svolto.
+  assert.ok(a.indexOf('Saso') !== -1, 'chi e anche operatore resta assegnabile');
+});
+
+test('assegnabiliCompenso: un tecnico chiuso con Data_Fine sparisce', function() {
+  var st = statoBase([], [progettoConCompensi(100, 100)]);
+  st.collaboratori = [{ ID_Collaboratore: 'k8', Nome: 'Uscito', Ruolo: 'Tecnico_Occasionale', Valore: 20, Data_Inizio: '2000-01-01', Data_Fine: '2020-01-01' }];
+  App.setState(st);
+  assert.ok(App.assegnabiliCompenso().indexOf('Uscito') === -1);
 });
