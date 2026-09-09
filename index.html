@@ -810,7 +810,7 @@ td.soon{color:var(--amber);}
               <option value="APERTE">Solo da saldare</option>
               <option value="CHIUSE">Solo chiuse</option>
             </select>
-            <button class="btn btn-ghost btn-sm" onclick="openCollaboratoriPanel()">Gestisci venditori</button>
+            <button class="btn btn-ghost btn-sm" onclick="vaiAiVenditori()">Gestisci venditori</button>
           </div>
           <div id="trt-kpi-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;"></div>
           <div class="table-wrap">
@@ -1867,7 +1867,7 @@ function switchCrmTab(tab, el) {
 }
 
 function _righeTrattative() {
-  return buildTrattativeChiuse(_s.clients, _s.preventivi, _s.provvigioni, _s.collaboratori, _s.projects);
+  return buildTrattativeChiuse(_s.clients, _s.preventivi, _s.provvigioni, personeConRuolo(_s.ruoli, 'Venditore'), _s.projects);
 }
 
 function renderTrattativeChiuse() {
@@ -1973,132 +1973,14 @@ function saveProvvRiga(idPrev) {
   });
 }
 
-// [v8.4] Pannello venditori. Il campo Ruolo esiste gia' nello schema ma qui e'
-// fisso a "Venditore": quando la proposta espansione §9 aggiungera' i tecnici
-// occasionali basta esporlo, non serve una seconda interfaccia.
-function openCollaboratoriPanel() {
-  document.getElementById('panel-title').innerHTML = 'Venditori e tecnici';
-  document.getElementById('panel-body').innerHTML = buildCollaboratoriPanelHtml();
-  document.getElementById('panel-footer').innerHTML =
-    '<div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="closePanel()">Chiudi</button></div>';
-  openPanel();
-}
-
-// [v8.4] Etichetta del campo Valore: per un venditore e' una percentuale sul
-// chiuso, per un tecnico occasionale un compenso in euro precompilato quando
-// lo assegni a una voce.
-function _labelValore(ruolo) {
-  return ruolo === 'Tecnico_Occasionale' ? 'Compenso predefinito (€)' : 'Percentuale (%)';
-}
-
-function _sezioneCollaboratori(ruolo, vuotoMsg) {
-  var isAdmin = _s.user && _s.user.role === 'admin';
-  var oggi = new Date().toISOString().split('T')[0];
-  var lista = (_s.collaboratori || []).filter(function(c) { return c && c.Ruolo === ruolo; });
-  if (!lista.length) return '<div style="color:var(--text3);font-size:13px;padding:12px 0">'+vuotoMsg+'</div>';
-
-  return '<div class="voci-list">' + lista.map(function(c) {
-    var df = String(c.Data_Fine || '2099-12-31').split('T')[0];
-    var attivo = df >= oggi;
-    var id = escAttr(c.ID_Collaboratore);
-    var del = isAdmin
-      ? '<button class="icon-btn del" onclick="eliminaCollaboratore(\''+id+'\')" title="Elimina"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button>'
-      : '';
-    var max = ruolo === 'Venditore' ? ' max="100"' : '';
-    return '<div class="voce-card"><div class="voce-card-header">'
-      + '<span class="voce-card-nome">'+escH(c.Nome)+'</span>'
-      + '<span class="badge '+(attivo?'badge-green':'badge-gray')+'" style="font-size:10px">'+(attivo?'Attivo':'Chiuso')+'</span>'
-      + '<span style="margin-left:auto;display:flex;gap:6px;align-items:center">'+del+'</span></div>'
-      + '<div class="voce-card-body"><div class="field-grid">'
-      + '<div class="field"><label>'+_labelValore(ruolo)+'</label><input type="number" min="0"'+max+' step="0.5" id="coll-val-'+id+'" value="'+(parseFloat(c.Valore)||0)+'"/></div>'
-      + '<div class="field"><label>Attivo fino al</label><input type="date" id="coll-fine-'+id+'" value="'+escAttr(df)+'"/></div>'
-      + '</div><div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="submitCollaboratore(\''+id+'\')">Salva</button></div></div></div>';
-  }).join('') + '</div>';
-}
-
-function buildCollaboratoriPanelHtml() {
-  return fs('Venditori', _sezioneCollaboratori('Venditore', 'Nessun venditore configurato.'))
-    + fs('Tecnici occasionali', _sezioneCollaboratori('Tecnico_Occasionale', 'Nessun tecnico occasionale configurato.'))
-    + fs('Aggiungi',
-        '<div class="field-grid">'
-        + '<div class="field"><label class="field-required">Nome</label><input type="text" id="coll-new-nome" placeholder="es. Luca"/></div>'
-        + '<div class="field"><label class="field-required">Ruolo</label>'
-        + '<select id="coll-new-ruolo" onchange="aggiornaLabelNuovoCollaboratore()">'
-        + '<option value="Venditore">Venditore</option>'
-        + '<option value="Tecnico_Occasionale">Tecnico occasionale</option>'
-        + '</select></div>'
-        + '</div>'
-        + '<div class="field" style="margin-top:10px"><label class="field-required" id="coll-new-val-label">Percentuale (%)</label>'
-        + '<input type="number" id="coll-new-val" min="0" step="0.5" value="10"/></div>'
-        + '<div style="margin-top:10px"><button class="btn btn-primary btn-sm" onclick="submitCollaboratore(\'\')">Aggiungi</button></div>'
-        + '<div style="font-size:11px;color:var(--text3);margin-top:8px">Il <b>venditore</b> prende una percentuale sulle trattative che chiude: le provvigioni gia\' aperte mantengono la percentuale con cui sono nate. Il <b>tecnico occasionale</b> riceve una cifra che decidi voce per voce; quella qui e\' solo il valore precompilato.</div>');
-}
-
-function aggiornaLabelNuovoCollaboratore() {
-  var sel = document.getElementById('coll-new-ruolo');
-  var lab = document.getElementById('coll-new-val-label');
-  var inp = document.getElementById('coll-new-val');
-  if (!sel || !lab) return;
-  lab.textContent = _labelValore(sel.value);
-  if (inp) {
-    if (sel.value === 'Venditore') inp.setAttribute('max', '100');
-    else inp.removeAttribute('max');
-  }
-}
-
-function submitCollaboratore(id) {
-  var payload = { action: 'saveCollaboratore' };
-  if (id) {
-    payload.ID_Collaboratore = id;
-    var ev = document.getElementById('coll-val-' + id);
-    var ef = document.getElementById('coll-fine-' + id);
-    var esistente = (_s.collaboratori || []).find(function(x) { return x.ID_Collaboratore === id; });
-    // Il ruolo non si cambia in modifica: cambiarlo trasformerebbe una
-    // percentuale in un compenso in euro senza che nessuno se ne accorga.
-    payload.Ruolo = esistente ? esistente.Ruolo : 'Venditore';
-    payload.Nome = esistente ? esistente.Nome : '';
-    payload.Valore = ev ? (parseFloat(ev.value) || 0) : 0;
-    payload.Data_Fine = ef ? ef.value : '';
-  } else {
-    var nome = (document.getElementById('coll-new-nome') || {}).value || '';
-    if (!nome.trim()) { showToast('Inserisci il nome', 'error'); return; }
-    payload.Nome = nome.trim();
-    payload.Ruolo = (document.getElementById('coll-new-ruolo') || {}).value || 'Venditore';
-    payload.Valore = parseFloat((document.getElementById('coll-new-val') || {}).value) || 0;
-  }
-  payload.Modello_Compenso = payload.Ruolo === 'Tecnico_Occasionale' ? 'Fisso_Per_Servizio' : 'Percentuale_Su_Chiuso';
-  if (payload.Valore < 0) { showToast('Il valore non puo\' essere negativo', 'error'); return; }
-  if (payload.Ruolo === 'Venditore' && payload.Valore > 100) { showToast('La percentuale deve stare fra 0 e 100', 'error'); return; }
-
-  setLoading(true);
-  apiPost(payload).then(function() {
-    loadCollaboratori(function() {
-      setLoading(false);
-      document.getElementById('panel-body').innerHTML = buildCollaboratoriPanelHtml();
-      try { renderTrattativeChiuse(); } catch (e) {}
-      try { refreshAnalyticsViews(); } catch (e) {}
-      showToast('Venditore salvato', 'success');
-    });
-  }).catch(function(e) {
-    setLoading(false);
-    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
-  });
-}
-
-function eliminaCollaboratore(id) {
-  if (!confirm('Eliminare questo venditore? Se ha provvigioni registrate il backend rifiuta: in quel caso chiudilo con una data di fine.')) return;
-  setLoading(true);
-  apiPost({ action: 'deleteCollaboratore', ID_Collaboratore: id }).then(function() {
-    loadCollaboratori(function() {
-      setLoading(false);
-      document.getElementById('panel-body').innerHTML = buildCollaboratoriPanelHtml();
-      try { renderTrattativeChiuse(); } catch (e) {}
-      showToast('Venditore eliminato', 'success');
-    });
-  }).catch(function(e) {
-    setLoading(false);
-    if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
-  });
+// [v8.5] Il pannello collaboratori e' stato ritirato: la sezione Persone lo
+// sostituisce. Questa scorciatoia porta la tab Venditori da dove serviva.
+function vaiAiVenditori() {
+  showPage('persone');
+  setTimeout(function() {
+    var b = document.querySelectorAll('#page-persone .tab-btn')[2];
+    if (b) switchPersoneTab('Venditore', b);
+  }, 120);
 }
 
 function buildClientForm(c) {
@@ -3019,14 +2901,10 @@ function salvaNuovoTecnico(scope, i) {
   if (val < 0) { showToast('Il compenso non puo\' essere negativo', 'error'); return; }
 
   setLoading(true);
-  apiPost({
-    action: 'saveCollaboratore',
-    Nome: nome,
-    Ruolo: 'Tecnico_Occasionale',
-    Modello_Compenso: 'Fisso_Per_Servizio',
-    Valore: val
+  apiPost({ action: 'savePersona', Nome: nome }).then(function(p) {
+    return apiPost({ action: 'saveRuolo', ID_Persona: p.ID_Persona, Ruolo: 'Fonico', Valore: val });
   }).then(function() {
-    loadCollaboratori(function() {
+    loadPersone(function() {
       setLoading(false);
       // Lo assegno subito alla voce: se lo stai creando qui, e' perche' ti serve ora.
       var comp = _compensiVoce(scope, i);
@@ -3360,9 +3238,14 @@ function buildTrattativeChiuse(clients, preventivi, provvigioni, collaboratori, 
     if (r && r.ID_Preventivo) provByPrev[r.ID_Preventivo] = r;
   });
 
+  // [v8.5] Indicizzato su entrambe le chiavi: ID_Persona per il registro nuovo,
+  // ID_Collaboratore per i preventivi accettati prima della migrazione. Stesso
+  // doppio aggancio che fa saveProvvigione lato backend.
   var collById = {};
   (collaboratori || []).forEach(function(k) {
-    if (k && k.ID_Collaboratore) collById[k.ID_Collaboratore] = k;
+    if (!k) return;
+    if (k.ID_Persona)       collById[k.ID_Persona] = k;
+    if (k.ID_Collaboratore) collById[k.ID_Collaboratore] = k;
   });
 
   var prjByPrev = {};
