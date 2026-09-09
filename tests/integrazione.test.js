@@ -285,3 +285,84 @@ test('beneficiariRicavi esclude i venditori con Data_Fine passata', function() {
   App.setState(st);
   assert.ok(App.beneficiariRicavi().indexOf('Uscito') === -1, 'un venditore chiuso non deve comparire nei selettori');
 });
+
+// ── Compensi espliciti, end-to-end ───────────────────────────
+
+function progettoConCompensi(acc, sal) {
+  return {
+    ID_Progetto: 'p2', ProjectCode: 'PRJ-0002', NomeCliente: 'Michele',
+    Servizio: 'Pacchetto REC', ID_Preventivo_Origine: 'pv1',
+    Voci_Bundle: [
+      { nome: 'Registrazione', prezzo: 100, operatore: 'Mussi',
+        compensi: [{ nome: 'Luca', importo: 40 }, { nome: 'Mussi', importo: 60 }] },
+      { nome: 'Mix', prezzo: 100, operatore: 'Cream' }
+    ],
+    Acconto: acc, Data_Acconto: '2026-01-15',
+    Saldo: sal, Data_Saldo: '2026-03-15',
+    Prezzo_Listino: 200, Stato: 'CHIUSO'
+  };
+}
+
+function statoConTecnico(provvigioni, progetti) {
+  var st = statoBase(provvigioni, progetti);
+  st.collaboratori = st.collaboratori.concat([
+    { ID_Collaboratore: 'k9', Nome: 'Luca', Ruolo: 'Tecnico_Occasionale', Valore: 40, Data_Inizio: '2000-01-01', Data_Fine: '2099-12-31' }
+  ]);
+  return st;
+}
+
+test('compensi end-to-end: provvigione e compensi convivono senza sbilanciare', function() {
+  App.setState(statoConTecnico(
+    [{ ID_Preventivo: 'pv1', Nome_Venditore: 'Saso', Percentuale: 10, Importo_Corrisposto: 20 }],
+    [progettoConCompensi(100, 100)]
+  ));
+  var movs = App.buildMovimenti();
+  var tot = {};
+  movs.forEach(function(m) {
+    assert.strictEqual(somma(m.allocazioni), m.importo,
+      'movimento ' + m.tipo + ' sbilanciato');
+    Object.keys(m.allocazioni).forEach(function(k) {
+      assert.ok(m.allocazioni[k] >= 0, 'quota negativa per ' + k);
+      tot[k] = (tot[k] || 0) + m.allocazioni[k];
+    });
+  });
+  assert.strictEqual(Math.round(tot.Saso*100)/100, 20, 'provvigione al venditore');
+  assert.strictEqual(Math.round(tot.Luca*100)/100, 36, 'tecnico occasionale');
+  assert.strictEqual(Math.round(tot.Mussi*100)/100, 54);
+  assert.strictEqual(Math.round(tot.Cream*100)/100, 90);
+  assert.strictEqual(somma(tot), 200, 'il totale studio resta 200');
+});
+
+test('compensi end-to-end: il residuo di voce va allo Studio', function() {
+  var prj = progettoConCompensi(200, 0);
+  prj.Voci_Bundle[0].compensi = [{ nome: 'Luca', importo: 30 }];
+  App.setState(statoConTecnico([], [prj]));
+  var tot = {};
+  App.buildMovimenti().forEach(function(m) {
+    assert.strictEqual(somma(m.allocazioni), m.importo);
+    Object.keys(m.allocazioni).forEach(function(k){ tot[k]=(tot[k]||0)+m.allocazioni[k]; });
+  });
+  assert.strictEqual(Math.round(tot.Luca*100)/100, 30);
+  assert.strictEqual(Math.round(tot.TheLab*100)/100, 70, 'il resto della voce A');
+  assert.strictEqual(Math.round(tot.Cream*100)/100, 100);
+  assert.strictEqual(somma(tot), 200);
+});
+
+test('compensi end-to-end: incasso parziale mantiene le proporzioni decise', function() {
+  App.setState(statoConTecnico([], [progettoConCompensi(100, 0)]));
+  var tot = {};
+  App.buildMovimenti().forEach(function(m) {
+    Object.keys(m.allocazioni).forEach(function(k){ tot[k]=(tot[k]||0)+m.allocazioni[k]; });
+  });
+  assert.strictEqual(Math.round(tot.Luca*100)/100, 20, 'meta incassato, meta compenso');
+  assert.strictEqual(Math.round(tot.Mussi*100)/100, 30);
+  assert.strictEqual(Math.round(tot.Cream*100)/100, 50);
+  assert.strictEqual(somma(tot), 100);
+});
+
+test('un tecnico occasionale compare fra i beneficiari disegnati', function() {
+  App.setState(statoConTecnico([], [progettoConCompensi(100, 100)]));
+  var b = App.beneficiariRicavi();
+  assert.ok(b.indexOf('Luca') !== -1, 'il tecnico occasionale deve essere disegnato');
+  assert.ok(b.indexOf('Saso') !== -1, 'il venditore pure');
+});

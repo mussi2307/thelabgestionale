@@ -656,6 +656,9 @@ td.soon{color:var(--amber);}
 .provv-input:disabled{opacity:.4;cursor:not-allowed;}
 .provv-residuo{display:block;font-size:10px;color:var(--red);margin-top:3px;}
 .provv-sospeso{display:block;font-size:10px;color:var(--text3);margin-top:3px;}
+/* [v8.4] Totalizzatore dei compensi assegnati a una voce. */
+.cmp-tot{font-size:10px;color:var(--text3);margin-top:6px;}
+.cmp-over{color:var(--red);}
 </style>
 </head>
 <body>
@@ -1422,9 +1425,42 @@ function nomeVenditore(id) {
 // disegnato in nessuna vista. Da usare ovunque si elenchino i BENEFICIARI dei
 // ricavi; NON per i selettori "chi esegue il servizio", dove il venditore non
 // c'entra e TEAM_MEMBERS resta corretto.
+// [v8.4] Chi puo' ricevere un compenso esplicito su una voce: gli operatori
+// fissi piu' i tecnici occasionali attivi. I venditori restano fuori — sono
+// pagati a provvigione, non a compenso per servizio.
+function tecniciOccasionaliAttivi() {
+  var oggi = new Date().toISOString().split('T')[0];
+  return (_s.collaboratori || []).filter(function(c) {
+    if (!c || c.Ruolo !== 'Tecnico_Occasionale') return false;
+    var di = String(c.Data_Inizio || '2000-01-01').split('T')[0] || '2000-01-01';
+    var df = String(c.Data_Fine || '2099-12-31').split('T')[0] || '2099-12-31';
+    return di <= oggi && oggi <= df;
+  });
+}
+
+function assegnabiliCompenso() {
+  var out = TEAM_MEMBERS.filter(function(m){ return m !== 'TheLab'; });
+  tecniciOccasionaliAttivi().forEach(function(c) {
+    var n = String(c.Nome || '').trim();
+    if (n && out.indexOf(n) === -1) out.push(n);
+  });
+  return out;
+}
+
+// Cifra precompilata quando scegli la chip: il Valore del registro se e' un
+// tecnico occasionale che ne ha uno, altrimenti si parte da vuoto.
+function compensoDefault(nome) {
+  var c = tecniciOccasionaliAttivi().find(function(x) { return String(x.Nome || '').trim() === nome; });
+  var v = c ? (parseFloat(c.Valore) || 0) : 0;
+  return v > 0 ? v : '';
+}
+
 function beneficiariRicavi() {
   var out = TEAM_MEMBERS.slice();
-  venditoriAttivi().forEach(function(c) {
+  // [v8.4] Venditori E tecnici occasionali: entrambi possono ricevere una
+  // quota, quindi entrambi devono comparire nelle viste, o l'allocazione
+  // finirebbe a qualcuno che nessuna schermata disegna.
+  venditoriAttivi().concat(tecniciOccasionaliAttivi()).forEach(function(c) {
     var n = String(c.Nome || '').trim();
     if (n && out.indexOf(n) === -1) out.push(n);
   });
@@ -1679,63 +1715,98 @@ function saveProvvRiga(idPrev) {
 // fisso a "Venditore": quando la proposta espansione §9 aggiungera' i tecnici
 // occasionali basta esporlo, non serve una seconda interfaccia.
 function openCollaboratoriPanel() {
-  document.getElementById('panel-title').innerHTML = 'Venditori';
+  document.getElementById('panel-title').innerHTML = 'Venditori e tecnici';
   document.getElementById('panel-body').innerHTML = buildCollaboratoriPanelHtml();
   document.getElementById('panel-footer').innerHTML =
     '<div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="closePanel()">Chiudi</button></div>';
   openPanel();
 }
 
-function buildCollaboratoriPanelHtml() {
+// [v8.4] Etichetta del campo Valore: per un venditore e' una percentuale sul
+// chiuso, per un tecnico occasionale un compenso in euro precompilato quando
+// lo assegni a una voce.
+function _labelValore(ruolo) {
+  return ruolo === 'Tecnico_Occasionale' ? 'Compenso predefinito (€)' : 'Percentuale (%)';
+}
+
+function _sezioneCollaboratori(ruolo, vuotoMsg) {
   var isAdmin = _s.user && _s.user.role === 'admin';
-  var lista = (_s.collaboratori || []).filter(function(c) { return c && c.Ruolo === 'Venditore'; });
   var oggi = new Date().toISOString().split('T')[0];
+  var lista = (_s.collaboratori || []).filter(function(c) { return c && c.Ruolo === ruolo; });
+  if (!lista.length) return '<div style="color:var(--text3);font-size:13px;padding:12px 0">'+vuotoMsg+'</div>';
 
-  var righe = !lista.length
-    ? '<div style="color:var(--text3);font-size:13px;padding:12px 0">Nessun venditore configurato.</div>'
-    : '<div class="voci-list">' + lista.map(function(c) {
-        var df = String(c.Data_Fine || '2099-12-31').split('T')[0];
-        var attivo = df >= oggi;
-        var del = isAdmin
-          ? '<button class="icon-btn del" onclick="eliminaCollaboratore(\''+escAttr(c.ID_Collaboratore)+'\')" title="Elimina"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button>'
-          : '';
-        return '<div class="voce-card"><div class="voce-card-header">'
-          + '<span class="voce-card-nome">'+escH(c.Nome)+'</span>'
-          + '<span class="badge '+(attivo?'badge-green':'badge-gray')+'" style="font-size:10px">'+(attivo?'Attivo':'Chiuso')+'</span>'
-          + '<span style="margin-left:auto;display:flex;gap:6px;align-items:center">'+del+'</span></div>'
-          + '<div class="voce-card-body"><div class="field-grid">'
-          + '<div class="field"><label>Percentuale (%)</label><input type="number" min="0" max="100" step="0.5" id="coll-val-'+escAttr(c.ID_Collaboratore)+'" value="'+(parseFloat(c.Valore)||0)+'"/></div>'
-          + '<div class="field"><label>Attivo fino al</label><input type="date" id="coll-fine-'+escAttr(c.ID_Collaboratore)+'" value="'+escAttr(df)+'"/></div>'
-          + '</div><div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="submitCollaboratore(\''+escAttr(c.ID_Collaboratore)+'\')">Salva</button></div></div></div>';
-      }).join('') + '</div>';
+  return '<div class="voci-list">' + lista.map(function(c) {
+    var df = String(c.Data_Fine || '2099-12-31').split('T')[0];
+    var attivo = df >= oggi;
+    var id = escAttr(c.ID_Collaboratore);
+    var del = isAdmin
+      ? '<button class="icon-btn del" onclick="eliminaCollaboratore(\''+id+'\')" title="Elimina"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button>'
+      : '';
+    var max = ruolo === 'Venditore' ? ' max="100"' : '';
+    return '<div class="voce-card"><div class="voce-card-header">'
+      + '<span class="voce-card-nome">'+escH(c.Nome)+'</span>'
+      + '<span class="badge '+(attivo?'badge-green':'badge-gray')+'" style="font-size:10px">'+(attivo?'Attivo':'Chiuso')+'</span>'
+      + '<span style="margin-left:auto;display:flex;gap:6px;align-items:center">'+del+'</span></div>'
+      + '<div class="voce-card-body"><div class="field-grid">'
+      + '<div class="field"><label>'+_labelValore(ruolo)+'</label><input type="number" min="0"'+max+' step="0.5" id="coll-val-'+id+'" value="'+(parseFloat(c.Valore)||0)+'"/></div>'
+      + '<div class="field"><label>Attivo fino al</label><input type="date" id="coll-fine-'+id+'" value="'+escAttr(df)+'"/></div>'
+      + '</div><div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="submitCollaboratore(\''+id+'\')">Salva</button></div></div></div>';
+  }).join('') + '</div>';
+}
 
-  return fs('Venditori configurati', righe)
-    + fs('Aggiungi venditore',
+function buildCollaboratoriPanelHtml() {
+  return fs('Venditori', _sezioneCollaboratori('Venditore', 'Nessun venditore configurato.'))
+    + fs('Tecnici occasionali', _sezioneCollaboratori('Tecnico_Occasionale', 'Nessun tecnico occasionale configurato.'))
+    + fs('Aggiungi',
         '<div class="field-grid">'
-        + '<div class="field"><label class="field-required">Nome</label><input type="text" id="coll-new-nome" placeholder="es. Saso"/></div>'
-        + '<div class="field"><label class="field-required">Percentuale (%)</label><input type="number" id="coll-new-val" min="0" max="100" step="0.5" value="10"/></div>'
+        + '<div class="field"><label class="field-required">Nome</label><input type="text" id="coll-new-nome" placeholder="es. Luca"/></div>'
+        + '<div class="field"><label class="field-required">Ruolo</label>'
+        + '<select id="coll-new-ruolo" onchange="aggiornaLabelNuovoCollaboratore()">'
+        + '<option value="Venditore">Venditore</option>'
+        + '<option value="Tecnico_Occasionale">Tecnico occasionale</option>'
+        + '</select></div>'
         + '</div>'
+        + '<div class="field" style="margin-top:10px"><label class="field-required" id="coll-new-val-label">Percentuale (%)</label>'
+        + '<input type="number" id="coll-new-val" min="0" step="0.5" value="10"/></div>'
         + '<div style="margin-top:10px"><button class="btn btn-primary btn-sm" onclick="submitCollaboratore(\'\')">Aggiungi</button></div>'
-        + '<div style="font-size:11px;color:var(--text3);margin-top:8px">La percentuale si applica alle trattative chiuse d\'ora in avanti. Le provvigioni gia\' aperte mantengono la percentuale con cui sono nate.</div>');
+        + '<div style="font-size:11px;color:var(--text3);margin-top:8px">Il <b>venditore</b> prende una percentuale sulle trattative che chiude: le provvigioni gia\' aperte mantengono la percentuale con cui sono nate. Il <b>tecnico occasionale</b> riceve una cifra che decidi voce per voce; quella qui e\' solo il valore precompilato.</div>');
+}
+
+function aggiornaLabelNuovoCollaboratore() {
+  var sel = document.getElementById('coll-new-ruolo');
+  var lab = document.getElementById('coll-new-val-label');
+  var inp = document.getElementById('coll-new-val');
+  if (!sel || !lab) return;
+  lab.textContent = _labelValore(sel.value);
+  if (inp) {
+    if (sel.value === 'Venditore') inp.setAttribute('max', '100');
+    else inp.removeAttribute('max');
+  }
 }
 
 function submitCollaboratore(id) {
-  var payload = { action: 'saveCollaboratore', Ruolo: 'Venditore', Modello_Compenso: 'Percentuale_Su_Chiuso' };
+  var payload = { action: 'saveCollaboratore' };
   if (id) {
     payload.ID_Collaboratore = id;
     var ev = document.getElementById('coll-val-' + id);
     var ef = document.getElementById('coll-fine-' + id);
     var esistente = (_s.collaboratori || []).find(function(x) { return x.ID_Collaboratore === id; });
+    // Il ruolo non si cambia in modifica: cambiarlo trasformerebbe una
+    // percentuale in un compenso in euro senza che nessuno se ne accorga.
+    payload.Ruolo = esistente ? esistente.Ruolo : 'Venditore';
     payload.Nome = esistente ? esistente.Nome : '';
     payload.Valore = ev ? (parseFloat(ev.value) || 0) : 0;
     payload.Data_Fine = ef ? ef.value : '';
   } else {
     var nome = (document.getElementById('coll-new-nome') || {}).value || '';
-    if (!nome.trim()) { showToast('Inserisci il nome del venditore', 'error'); return; }
+    if (!nome.trim()) { showToast('Inserisci il nome', 'error'); return; }
     payload.Nome = nome.trim();
+    payload.Ruolo = (document.getElementById('coll-new-ruolo') || {}).value || 'Venditore';
     payload.Valore = parseFloat((document.getElementById('coll-new-val') || {}).value) || 0;
   }
-  if (payload.Valore < 0 || payload.Valore > 100) { showToast('La percentuale deve stare fra 0 e 100', 'error'); return; }
+  payload.Modello_Compenso = payload.Ruolo === 'Tecnico_Occasionale' ? 'Fisso_Per_Servizio' : 'Percentuale_Su_Chiuso';
+  if (payload.Valore < 0) { showToast('Il valore non puo\' essere negativo', 'error'); return; }
+  if (payload.Ruolo === 'Venditore' && payload.Valore > 100) { showToast('La percentuale deve stare fra 0 e 100', 'error'); return; }
 
   setLoading(true);
   apiPost(payload).then(function() {
@@ -2229,7 +2300,8 @@ function renderVociBnd(voci) {
     + voci.map(function(vv, i) {
       return '<div class="voce-card"><div class="voce-card-header"><span class="voce-card-nome">'+escH(vv.nome)+'</span></div>'
         +'<div class="voce-card-body"><div class="field"><label>Compenso team (€)</label><input type="number" id="vbcomp-'+i+'" value="'+escH(String(vv.compenso||''))+'" placeholder="€"/></div>'
-        +'<div class="field"><label>Operatore</label><div class="team-select" id="vbteam-'+i+'">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="toggleVoceTeam(this,'+i+',\''+m+'\')">'+m+'</div>'; }).join('')+'</div></div></div></div>';
+        +'<div class="field"><label>Operatore</label><div class="team-select" id="vbteam-'+i+'">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="toggleVoceTeam(this,'+i+',\''+m+'\')">'+m+'</div>'; }).join('')+'</div></div>'
+        +buildCompensiEditor('prj', i)+'</div></div>';
     }).join('') + '</div></div>';
 }
 function toggleVoceTeam(el, i, m) {
@@ -2241,7 +2313,15 @@ function collectVociBnd() {
   _curVoci.forEach(function(vv, i) {
     var ci = document.getElementById('vbcomp-'+i);
     var ti = document.querySelector('#vbteam-'+i+' .team-chip.selected');
-    res.push({nome: vv.nome, compenso: ci ? ci.value : '', operatore: ti ? ti.textContent : ''});
+    // [v8.4] Si parte dalla voce esistente invece di ricostruirla da zero:
+    // prima i campi non letti qui (categoria, prezzoListino, e ora compensi)
+    // venivano persi a ogni salvataggio del progetto.
+    var out = {};
+    Object.keys(vv).forEach(function(k){ out[k] = vv[k]; });
+    out.nome = vv.nome;
+    out.compenso = ci ? ci.value : '';
+    out.operatore = ti ? ti.textContent : '';
+    res.push(out);
   });
   return res;
 }
@@ -2588,11 +2668,95 @@ function renderPrevVociList() {
     if (vv.prezzoListino > 0 && vv.prezzo !== vv.prezzoListino) { var diff = vv.prezzoListino - vv.prezzo; flagHtml = '<span class="voce-flag '+(diff > 0 ? 'sconto' : 'ok')+'">'+(diff > 0 ? '▼ €'+diff.toFixed(0)+' da listino' : '▲ Extra')+'</span>'; }
     return '<div class="voce-card"><div class="voce-card-header"><span class="voce-card-nome">'+escH(vv.nome)+'</span>'+flagHtml+'<button class="icon-btn del" onclick="removePrevVoce('+i+')" style="margin-left:auto" title="Rimuovi"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>'
       +'<div class="voce-card-body"><div class="field"><label>Prezzo (€) <span style="color:var(--text3)">[listino: €'+vv.prezzoListino+']</span></label><input type="number" id="pvp-'+i+'" value="'+vv.prezzo+'" oninput="updPrevVocePrezzo('+i+',this.value)"/></div>'
-      +'<div class="field"><label>Operatore</label><div class="team-select">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevOp('+i+',\''+m+'\',this)">'+m+'</div>'; }).join('')+'</div></div></div></div>';
+      +'<div class="field"><label>Operatore</label><div class="team-select">'+TEAM_MEMBERS.map(function(m) { return '<div class="team-chip'+(vv.operatore===m?' selected':'')+'" style="padding:3px 8px;font-size:11px" onclick="selPrevOp('+i+',\''+m+'\',this)">'+m+'</div>'; }).join('')+'</div></div>'
+      +buildCompensiEditor('prev', i)+'</div></div>';
   }).join('') + '</div>';
 }
 function updPrevVocePrezzo(i, val) { _prevVoci[i].prezzo = parseFloat(val) || 0; updPrevTotale(); }
 function selPrevOp(i, m, el) { _prevVoci[i].operatore = m; el.parentNode.querySelectorAll('.team-chip').forEach(function(c) { c.classList.remove('selected'); }); el.classList.add('selected'); }
+
+// ── COMPENSI PER VOCE ────────────────────────────────────────
+// [v8.4] Editor condiviso fra il pannello preventivo (_prevVoci, prezzo in
+// `prezzo`) e quello progetto (_curVoci, prezzo in `compenso`). Assegni una
+// cifra a testa; quello che avanza sulla voce resta allo Studio.
+
+function _vociScope(scope) { return scope === 'prev' ? _prevVoci : _curVoci; }
+
+// Prezzo corrente della voce letto dal campo vivo, cosi' il totalizzatore
+// reagisce mentre digiti invece di usare un valore stantio.
+function _prezzoVoceLive(scope, i) {
+  var el = document.getElementById((scope === 'prev' ? 'pvp-' : 'vbcomp-') + i);
+  if (el && el.value !== '') return parseFloat(el.value) || 0;
+  var vv = _vociScope(scope)[i];
+  return vv ? (parseFloat(vv.prezzo !== undefined && vv.prezzo !== '' ? vv.prezzo : vv.compenso) || 0) : 0;
+}
+
+function _compensiVoce(scope, i) {
+  var vv = _vociScope(scope)[i];
+  if (!vv) return [];
+  if (!Array.isArray(vv.compensi)) vv.compensi = [];
+  return vv.compensi;
+}
+
+function buildCompensiEditor(scope, i) {
+  var vv = _vociScope(scope)[i]; if (!vv) return '';
+  var comp = _compensiVoce(scope, i);
+  var scelti = comp.map(function(c){ return String(c.nome || '').trim(); });
+
+  var chips = assegnabiliCompenso().map(function(n) {
+    var sel = scelti.indexOf(n) !== -1;
+    return '<div class="team-chip'+(sel ? ' selected' : '')+'" style="padding:3px 8px;font-size:11px" '
+      + 'onclick="toggleCompenso(\''+scope+'\','+i+',\''+escAttr(n)+'\')">'+escH(n)+'</div>';
+  }).join('');
+
+  var righe = comp.map(function(c) {
+    var n = String(c.nome || '').trim();
+    return '<div style="display:flex;align-items:center;gap:8px;margin-top:6px">'
+      + '<span style="font-size:11px;color:var(--text2);min-width:70px">'+escH(n)+'</span>'
+      + '<input class="provv-input" type="number" min="0" step="0.01" value="'+escAttr(String(c.importo === '' ? '' : c.importo))+'" '
+      +   'oninput="updCompensoImporto(\''+scope+'\','+i+',\''+escAttr(n)+'\',this.value)" placeholder="€"/>'
+      + '</div>';
+  }).join('');
+
+  return '<div class="field" id="cmp-box-'+scope+'-'+i+'"><label>Compensi</label>'
+    + '<div class="team-select">'+chips+'</div>'
+    + righe
+    + '<div class="cmp-tot" id="cmp-tot-'+scope+'-'+i+'">'+_testoTotaleCompensi(scope, i)+'</div>'
+    + '</div>';
+}
+
+function _testoTotaleCompensi(scope, i) {
+  var comp = _compensiVoce(scope, i);
+  if (!comp.length) return 'Nessun compenso assegnato: la voce segue l\'operatore.';
+  var somma = comp.reduce(function(s, c){ return s + (parseFloat(c.importo) || 0); }, 0);
+  var prezzo = _prezzoVoceLive(scope, i);
+  if (somma > prezzo && prezzo > 0) {
+    return '<span class="cmp-over">Assegnati € '+somma.toFixed(2)+' su € '+prezzo.toFixed(2)+' — le quote verranno scalate in proporzione.</span>';
+  }
+  var resto = Math.max(0, prezzo - somma);
+  return 'Assegnati € '+somma.toFixed(2)+' su € '+prezzo.toFixed(2)+' — allo Studio € '+resto.toFixed(2)+'.';
+}
+
+function toggleCompenso(scope, i, nome) {
+  var comp = _compensiVoce(scope, i);
+  var k = -1;
+  for (var j = 0; j < comp.length; j++) {
+    if (String(comp[j].nome || '').trim() === nome) { k = j; break; }
+  }
+  if (k === -1) comp.push({ nome: nome, importo: compensoDefault(nome) });
+  else comp.splice(k, 1);
+  var box = document.getElementById('cmp-box-' + scope + '-' + i);
+  if (box) box.outerHTML = buildCompensiEditor(scope, i);
+}
+
+function updCompensoImporto(scope, i, nome, val) {
+  var comp = _compensiVoce(scope, i);
+  comp.forEach(function(c) {
+    if (String(c.nome || '').trim() === nome) c.importo = (val === '' ? '' : (parseFloat(val) || 0));
+  });
+  var t = document.getElementById('cmp-tot-' + scope + '-' + i);
+  if (t) t.innerHTML = _testoTotaleCompensi(scope, i);
+}
 
 // [v8.4] Chip dei venditori attivi + chip "Vendita diretta" per azzerare.
 function buildVenditoreChips(sel) {
