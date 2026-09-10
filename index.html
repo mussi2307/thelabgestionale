@@ -2337,9 +2337,16 @@ function buildProjectForm(p) {
   _selClient = p.ID_Cliente ? {ID_Cliente: p.ID_Cliente, NomeCliente: p.NomeCliente||''} : null;
   _selTeam   = p.Assegnato_A ? p.Assegnato_A.split(',').map(function(m){return m.trim();}).filter(Boolean) : [];
   _curVoci   = Array.isArray(p.Voci_Bundle) ? p.Voci_Bundle.slice() : [];
+  // [v8.6] Su un SINGOLO gia' salvato i compensi stanno nell'unica voce
+  // sintetizzata; su un progetto nuovo si parte da una lista vuota.
+  var voceEsistente = (p.Tipo !== 'BUNDLE' && _curVoci.length) ? _curVoci[0] : null;
+  _prjTot = [{
+    nome: p.Servizio || '',
+    prezzo: parseFloat(p.Prezzo_Listino) || 0,
+    compensi: (voceEsistente && Array.isArray(voceEsistente.compensi)) ? voceEsistente.compensi.slice() : []
+  }];
   var today  = new Date().toISOString().split('T')[0];
   var clientTag = _selClient ? '<div class="selected-client-tag" id="sel-client-tag"><span>'+escH(_selClient.NomeCliente)+'</span><button onclick="clearSelClient()">×</button></div>' : '';
-  var teamChips = '<div class="team-select" id="team-chips">'+teamMembers().map(function(m) { return '<div class="team-chip'+(_selTeam.indexOf(m) !== -1 ? ' selected' : '')+'" onclick="toggleTeam(this,\''+m+'\')">'+m+'</div>'; }).join('')+'</div>';
   var listinoNote = !_s.listinoLoaded ? '<div id="listino-loading-placeholder" class="listino-loading">⏳ Caricamento servizi in corso…</div>' : '';
   // Banner preventivo origine
   var prvBanner = '';
@@ -2383,7 +2390,18 @@ function buildProjectForm(p) {
     +'<div class="field"><label>Saldo (€)</label><input type="number" id="f-saldo" value="'+escH(p.Saldo||'')+'" oninput="updPagFlag()"/></div>'
     +'<div class="field"><label>Data saldo</label><input type="date" id="f-data-saldo" value="'+escH(toInputDate(p.Data_Saldo))+'"/></div></div>'
     +'<div id="pag-flag-cont"></div>')
-  +fs('Team', '<div class="field"><label>Assegnato a</label>'+teamChips+'</div>')
+  // [v8.6] La sezione Team e' l'editor dei compensi: scegli chi ha lavorato e
+  // quanto gli spetta. Assegnato_A si deriva da qui, non si compila piu' a mano.
+  // Per i BUNDLE i compensi stanno sulle singole voci, piu' precisi: qui compare
+  // solo il rimando, per non avere due punti che scrivono lo stesso dato.
+  +fs('Team',
+    '<div class="field" id="team-sec-singolo"'+(p.Tipo==='BUNDLE'?' style="display:none"':'')+'>'
+    + '<label>Chi ha lavorato e quanto gli spetta</label>'
+    + buildCompensiProgetto()
+    + '</div>'
+    + '<div class="field" id="team-sec-bundle"'+(p.Tipo==='BUNDLE'?'':' style="display:none"')+'>'
+    + '<div id="team-recap-bundle" class="cmp-tot"></div>'
+    + '</div>')
   +fs('Note', '<div class="field-grid full"><div class="field"><textarea id="f-note-prj">'+escH(p.Note||'')+'</textarea></div></div>');
 }
 
@@ -2424,6 +2442,34 @@ function onTipoChange() {
   if (!ss || !bs) return;
   if (t === 'BUNDLE') { ss.style.display = 'none'; bs.style.display = 'block'; }
   else { bs.style.display = 'none'; ss.style.display = 'block'; }
+  // [v8.6] I compensi si compilano a livello progetto sul SINGOLO e sulle
+  // singole voci sul BUNDLE: la sezione Team mostra l'uno o l'altro.
+  var ts = document.getElementById('team-sec-singolo');
+  var tb = document.getElementById('team-sec-bundle');
+  if (ts) ts.style.display = (t === 'BUNDLE') ? 'none' : '';
+  if (tb) tb.style.display = (t === 'BUNDLE') ? '' : 'none';
+  if (t === 'BUNDLE') renderRecapBundle();
+}
+
+// Riepilogo in sola lettura di chi prende cosa sulle voci del bundle.
+function renderRecapBundle() {
+  var el = document.getElementById('team-recap-bundle'); if (!el) return;
+  var nomi = nomiDaCompensi(_curVoci);
+  if (!nomi.length) {
+    el.innerHTML = 'I compensi di un bundle si assegnano voce per voce, nella sezione "Voci bundle" qui sopra.';
+    return;
+  }
+  var tot = {};
+  _curVoci.forEach(function(vv) {
+    _compensiValidi(vv).forEach(function(c) {
+      var n = String(c.nome).trim();
+      tot[n] = (tot[n] || 0) + (parseFloat(c.importo) || 0);
+    });
+  });
+  el.innerHTML = 'Assegnato voce per voce: '
+    + nomi.map(function(n) {
+        return escH(n) + (tot[n] ? ' € ' + tot[n].toFixed(2) : '');
+      }).join(' · ');
 }
 function onServChange() {
   var sel = document.getElementById('f-servizio'); if (!sel || !sel.value) return;
@@ -2493,7 +2539,34 @@ function collectProjectForm() {
   var tipo = v('f-tipo'), sNome = '';
   if (tipo === 'SINGOLO') { var ss2 = document.getElementById('f-servizio'); if (ss2 && ss2.selectedIndex > 0) { var oo = ss2.options[ss2.selectedIndex]; sNome = oo.getAttribute('data-nome') || oo.text.split(' —')[0]; } }
   else { var customField = document.getElementById('f-servizio-custom'); if (customField) { sNome = customField.value; } else { var sb2 = document.getElementById('f-bundle'); if (sb2 && sb2.selectedIndex > 0) { var ob = sb2.options[sb2.selectedIndex]; sNome = ob.getAttribute('data-nome') || ob.text.split(' —')[0]; } } }
-  return {ID_Cliente: _selClient ? _selClient.ID_Cliente : '', NomeCliente: _selClient ? _selClient.NomeCliente : '', Tipo: tipo, Servizio: sNome, Voci_Bundle: tipo === 'BUNDLE' ? collectVociBnd() : [], Prezzo_Listino: parseFloat(v('f-prezzo-lst')) || 0, Acconto: parseFloat(v('f-acconto')) || 0, Data_Acconto: v('f-data-acconto'), Saldo: parseFloat(v('f-saldo')) || 0, Data_Saldo: v('f-data-saldo'), Assegnato_A: _selTeam, Stato: v('f-stato'), Data_Inizio: v('f-data-inizio'), Deadline: v('f-deadline'), Giorni_Deadline: parseInt(v('f-giorni-dl')) || 0, Note: v('f-note-prj')};
+  var acconto = parseFloat(v('f-acconto')) || 0;
+  var saldo   = parseFloat(v('f-saldo')) || 0;
+  var listino = parseFloat(v('f-prezzo-lst')) || 0;
+
+  // [v8.6] Il SINGOLO diventa una voce sola con i suoi compensi: da li' in poi
+  // e' indistinguibile da un bundle per la logica di allocazione. Se non hai
+  // assegnato nessun compenso la voce non si scrive, e il progetto continua a
+  // comportarsi come prima.
+  var voci;
+  if (tipo === 'BUNDLE') {
+    voci = collectVociBnd();
+  } else {
+    var comp = _compensiValidi(_prjTot[0]);
+    voci = comp.length
+      ? [voceSingolo(sNome, { Prezzo_Listino: listino, Acconto: acconto, Saldo: saldo }, _prjTot[0].compensi)]
+      : [];
+  }
+
+  return {ID_Cliente: _selClient ? _selClient.ID_Cliente : '', NomeCliente: _selClient ? _selClient.NomeCliente : '',
+    Tipo: tipo, Servizio: sNome, Voci_Bundle: voci,
+    Prezzo_Listino: listino,
+    Acconto: acconto, Data_Acconto: v('f-data-acconto'),
+    Saldo: saldo, Data_Saldo: v('f-data-saldo'),
+    // Assegnato_A si deriva dai compensi: alimenta la colonna TEAM, la ricerca
+    // e il carico in dashboard senza essere un secondo input da tenere allineato.
+    Assegnato_A: nomiDaCompensi(voci).length ? nomiDaCompensi(voci) : _selTeam,
+    Stato: v('f-stato'), Data_Inizio: v('f-data-inizio'), Deadline: v('f-deadline'),
+    Giorni_Deadline: parseInt(v('f-giorni-dl')) || 0, Note: v('f-note-prj')};
 }
 function submitCreateProject() {
   if (!_selClient) { showToast('Seleziona un cliente', 'error'); return; }
@@ -2552,7 +2625,6 @@ function selCliForForm(id) {
   w.parentNode.insertAdjacentElement('afterend', tag);
 }
 function clearSelClient() { _selClient = null; var t = document.getElementById('sel-client-tag'); if (t) t.remove(); }
-function toggleTeam(el, m) { var i = _selTeam.indexOf(m); if (i === -1) { _selTeam.push(m); el.classList.add('selected'); } else { _selTeam.splice(i, 1); el.classList.remove('selected'); } }
 
 // ── BUNDLE & PREVENTIVI ──────────────────────────────────────
 function loadPreventivi(cb) {
@@ -2824,11 +2896,27 @@ function selPrevOp(i, m, el) { _prevVoci[i].operatore = m; el.parentNode.querySe
 // `prezzo`) e quello progetto (_curVoci, prezzo in `compenso`). Assegni una
 // cifra a testa; quello che avanza sulla voce resta allo Studio.
 
-function _vociScope(scope) { return scope === 'prev' ? _prevVoci : _curVoci; }
+// [v8.6] Terzo scope: i compensi a livello di progetto SINGOLO, che non ha una
+// lista voci. E' una lista di UNA voce fittizia, cosi' tutto l'editor esistente
+// funziona senza duplicarlo.
+var _prjTot = [{ nome: '', prezzo: 0, compensi: [] }];
+
+function _vociScope(scope) {
+  if (scope === 'prev')   return _prevVoci;
+  if (scope === 'prjtot') return _prjTot;
+  return _curVoci;
+}
 
 // Prezzo corrente della voce letto dal campo vivo, cosi' il totalizzatore
 // reagisce mentre digiti invece di usare un valore stantio.
 function _prezzoVoceLive(scope, i) {
+  // A livello progetto il peso e' il prezzo totale atteso; se non c'e',
+  // quello che e' stato incassato fra acconto e saldo.
+  if (scope === 'prjtot') {
+    var lst = parseFloat(v('f-prezzo-lst')) || 0;
+    if (lst > 0) return lst;
+    return (parseFloat(v('f-acconto')) || 0) + (parseFloat(v('f-saldo')) || 0);
+  }
   var el = document.getElementById((scope === 'prev' ? 'pvp-' : 'vbcomp-') + i);
   if (el && el.value !== '') return parseFloat(el.value) || 0;
   var vv = _vociScope(scope)[i];
@@ -2920,6 +3008,70 @@ function salvaNuovoTecnico(scope, i) {
   }).catch(function(e) {
     setLoading(false);
     if (e.message !== 'Unauthorized') showToast('Errore: ' + e.message, 'error');
+  });
+}
+
+// [v8.6] Editor a livello progetto: dropdown invece delle chip, e ogni riga
+// porta anche la data in cui hai pagato quella persona. La data e' una nota:
+// non sposta il mese contabile, che segue gli incassi da cui la quota e'
+// ritagliata — e' cio' che tiene la somma pari all'incassato senza negativi.
+function buildCompensiProgetto() {
+  var comp = _compensiVoce('prjtot', 0);
+  var scelti = comp.map(function(c){ return String(c.nome || '').trim(); });
+  var liberi = assegnabiliCompenso().filter(function(n){ return scelti.indexOf(n) === -1; });
+
+  var sel = liberi.length
+    ? '<select id="cmp-prj-sel" onchange="aggiungiCompensoProgetto(this.value)">'
+      + '<option value="">— Aggiungi una persona —</option>'
+      + liberi.map(function(n){ return '<option value="'+escAttr(n)+'">'+escH(n)+'</option>'; }).join('')
+      + '</select>'
+    : '<div style="font-size:11px;color:var(--text3)">Tutte le persone disponibili sono gia\' assegnate.</div>';
+
+  var righe = comp.map(function(c, k) {
+    var n = String(c.nome || '').trim();
+    return '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">'
+      + '<span style="font-size:13px;font-weight:600;min-width:90px">'+escH(n)+'</span>'
+      + '<input class="provv-input" type="number" min="0" step="0.01" placeholder="€"'
+      +   ' value="'+escAttr(String(c.importo === '' ? '' : c.importo))+'"'
+      +   ' oninput="updCompensoImporto(\'prjtot\',0,\''+escAttr(n)+'\',this.value)"/>'
+      + '<input class="provv-input" type="date" style="width:140px"'
+      +   ' value="'+escAttr(String(c.data || ''))+'"'
+      +   ' onchange="updCompensoData(\''+escAttr(n)+'\',this.value)"/>'
+      + '<button class="icon-btn del" title="Rimuovi" onclick="rimuoviCompensoProgetto('+k+')">'
+      +   '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l10 10M13 3L3 13"/></svg></button>'
+      + '</div>';
+  }).join('');
+
+  return '<div id="cmp-box-prjtot-0">'
+    + sel
+    + righe
+    + '<div class="cmp-tot" id="cmp-tot-prjtot-0">'+_testoTotaleCompensi('prjtot', 0)+'</div>'
+    + '</div>';
+}
+
+function _ridisegnaCompensiProgetto() {
+  var box = document.getElementById('cmp-box-prjtot-0');
+  if (box) box.outerHTML = buildCompensiProgetto();
+}
+
+function aggiungiCompensoProgetto(nome) {
+  if (!nome) return;
+  var comp = _compensiVoce('prjtot', 0);
+  for (var i = 0; i < comp.length; i++) {
+    if (String(comp[i].nome || '').trim() === nome) return;
+  }
+  comp.push({ nome: nome, importo: compensoDefault(nome), data: '' });
+  _ridisegnaCompensiProgetto();
+}
+
+function rimuoviCompensoProgetto(k) {
+  _compensiVoce('prjtot', 0).splice(k, 1);
+  _ridisegnaCompensiProgetto();
+}
+
+function updCompensoData(nome, val) {
+  _compensiVoce('prjtot', 0).forEach(function(c) {
+    if (String(c.nome || '').trim() === nome) c.data = val || '';
   });
 }
 
@@ -3389,6 +3541,44 @@ function allocaVoci(voci, incassato) {
   });
 
   return alloc;
+}
+
+// [v8.6] Un progetto SINGOLO non ha voci: qui se ne sintetizza una sola, con
+// il prezzo del progetto come peso. Cosi' allocaVoci() lo gestisce senza
+// logica nuova — una lista da un elemento e' un caso normale per lei — e i
+// compensi funzionano identici su singoli e bundle.
+function voceSingolo(servizio, progetto, compensi) {
+  var p = progetto || {};
+  var prezzo = parseFloat(p.Prezzo_Listino) || 0;
+  // Senza prezzo di listino il peso e' cio' che e' stato incassato: senza un
+  // peso la voce non parteciperebbe alla ripartizione.
+  if (prezzo <= 0) prezzo = (parseFloat(p.Acconto) || 0) + (parseFloat(p.Saldo) || 0);
+  return {
+    nome: String(servizio || ''),
+    prezzo: prezzo,
+    compensi: Array.isArray(compensi) ? compensi : []
+  };
+}
+
+// Assegnato_A si deriva dalle voci invece di essere compilato a mano: i nomi
+// dei compensi, piu' gli operatori delle voci che non ne hanno. Alimenta la
+// colonna TEAM della tabella progetti, la ricerca e il carico in dashboard.
+// TheLab resta fuori: e' l'entita' residuale, non una persona assegnata.
+function nomiDaCompensi(voci) {
+  var out = [];
+  function add(n) {
+    var s = String(n || '').trim();
+    if (s && s !== 'TheLab' && out.indexOf(s) === -1) out.push(s);
+  }
+  (Array.isArray(voci) ? voci : []).forEach(function(vv) {
+    var comp = _compensiValidi(vv);
+    if (comp.length) comp.forEach(function(c){ add(c.nome); });
+    else add(vv && vv.operatore);
+  });
+  // Ordinato: cosi' l'elenco non dipende dall'ordine delle voci e la colonna
+  // TEAM non cambia da sola quando riordini il bundle.
+  out.sort();
+  return out;
 }
 
 // [v8.5] Finestra di validita' di un record datato. Unica implementazione:

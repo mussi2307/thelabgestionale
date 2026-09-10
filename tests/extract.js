@@ -22,7 +22,9 @@ function loadTestable() {
     'allocaVoci',
     'attivoIl',
     'personeConRuolo',
-    'nomiConRuolo'
+    'nomiConRuolo',
+    'voceSingolo',
+    'nomiDaCompensi'
   ];
   var out = {};
   var fn = new Function('__out', src + '\n;' + exported.map(function(n){
